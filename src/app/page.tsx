@@ -3,15 +3,75 @@ import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase, type Store } from '@/lib/supabase'
 
+const PASS_KEY = 'ahnkism_auth'
+const CORRECT_ID = 'ahnkism_2026'
+const CORRECT_PASS = 'zaiko_2026'
+
 export default function Home() {
   const router = useRouter()
   const [stores, setStores] = useState<Store[]>([])
+  const [authed, setAuthed] = useState(false)
+  const [inputId, setInputId] = useState('')
+  const [input, setInput] = useState('')
+  const [error, setError] = useState(false)
 
   useEffect(() => {
+    if (localStorage.getItem(PASS_KEY) === '1') setAuthed(true)
+  }, [])
+
+  useEffect(() => {
+    if (!authed) return
     supabase.from('stores').select('*').order('sort_order').then(({ data }) => {
       if (data) setStores(data)
     })
-  }, [])
+  }, [authed])
+
+  function handleLogin(e: React.FormEvent) {
+    e.preventDefault()
+    if (inputId === CORRECT_ID && input === CORRECT_PASS) {
+      localStorage.setItem(PASS_KEY, '1')
+      setAuthed(true)
+      setError(false)
+    } else {
+      setError(true)
+    }
+  }
+
+  if (!authed) {
+    return (
+      <main className="flex flex-col items-center justify-center min-h-screen p-6">
+        <div className="w-full max-w-sm">
+          <h1 className="text-2xl font-bold text-center mb-2 text-gray-800">アンキシム 在庫管理</h1>
+          <p className="text-center text-gray-500 mb-8 text-sm">パスワードを入力してください</p>
+          <form onSubmit={handleLogin} className="flex flex-col gap-3">
+            <input
+              type="text"
+              value={inputId}
+              onChange={(e) => { setInputId(e.target.value); setError(false) }}
+              placeholder="ログインID"
+              className="w-full border-2 border-gray-200 rounded-2xl py-4 px-5 text-lg text-center outline-none focus:border-blue-400"
+              autoFocus
+              autoCapitalize="none"
+            />
+            <input
+              type="password"
+              value={input}
+              onChange={(e) => { setInput(e.target.value); setError(false) }}
+              placeholder="パスワード"
+              className="w-full border-2 border-gray-200 rounded-2xl py-4 px-5 text-lg text-center outline-none focus:border-blue-400"
+            />
+            {error && <p className="text-center text-red-500 text-sm">パスワードが違います</p>}
+            <button
+              type="submit"
+              className="w-full bg-blue-500 text-white rounded-2xl py-4 text-lg font-bold active:bg-blue-600"
+            >
+              ログイン
+            </button>
+          </form>
+        </div>
+      </main>
+    )
+  }
 
   return (
     <main className="flex flex-col items-center justify-center min-h-screen p-6">
