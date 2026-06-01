@@ -194,7 +194,7 @@ export default function AdminPage() {
       </div>
 
       {/* テーブル */}
-      <div className="overflow-x-auto">
+      <div className="overflow-x-auto" style={{ paddingRight: '80vw' }}>
         <table className="text-xs border-collapse" style={{ tableLayout: 'fixed', width: 'max-content' }}>
           <thead>
             <tr className="bg-gray-100">
