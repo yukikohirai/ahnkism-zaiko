@@ -4,7 +4,7 @@ import { supabase } from '@/lib/supabase'
 
 type Store = { id: number; name: string }
 type Category = { id: number; name: string; sort_order: number }
-type Product = { id: number; category_id: number; brand: string | null; name: string; required_qty: number }
+type Product = { id: number; category_id: number; brand: string | null; name: string; required_qty: number; dealer: string | null }
 type UsageLog = { id: number; store_id: number; product_id: number; date: string; quantity: number; type: string }
 type Receipt = { id: number; product_id: number; date: string; quantity: number }
 type Balance = { product_id: number; year_month: string; carry_over: number }
@@ -336,10 +336,121 @@ export default function AdminPage() {
       </div>
 
       {/* 凡例 */}
-      <div className="p-4 text-xs text-gray-400 flex gap-4">
+      <div className="px-4 pt-3 pb-1 text-xs text-gray-400 flex gap-4">
         <span>🟩 入庫（タップで編集）</span>
         <span>数字タップで種類切替：<span className="text-blue-600">業務</span>→<span className="text-green-600">店販</span>→<span className="text-amber-600">個人</span></span>
       </div>
+
+      {/* 発注リスト */}
+      <OrderList products={products} balances={balances} receipts={receipts} logs={logs} ym={ym} />
+    </div>
+  )
+}
+
+// ─── 発注リスト ───────────────────────────────────────
+type OrderListProps = {
+  products: (Product & { dealer: string | null })[]
+  balances: Balance[]
+  receipts: Receipt[]
+  logs: UsageLog[]
+  ym: string
+}
+
+function OrderList({ products, balances, receipts, logs, ym }: OrderListProps) {
+  const [open, setOpen] = useState(true)
+
+  // 現在庫 = 繰越 + 入庫合計 - 出庫合計
+  const items = products.map(p => {
+    const carryOver = balances.find(b => b.product_id === p.id)?.carry_over ?? 0
+    const totalIn = receipts.filter(r => r.product_id === p.id).reduce((s, r) => s + r.quantity, 0)
+    const totalOut = logs.filter(l => l.product_id === p.id).reduce((s, l) => s + l.quantity, 0)
+    const currentStock = carryOver + totalIn - totalOut
+    const orderQty = p.required_qty - currentStock
+    return { ...p, currentStock, orderQty }
+  }).filter(p => p.orderQty > 0 && p.required_qty > 0)
+
+  // ディーラー別グループ化
+  const grouped = items.reduce<Record<string, typeof items>>((acc, p) => {
+    const dealer = p.dealer ?? 'その他'
+    if (!acc[dealer]) acc[dealer] = []
+    acc[dealer].push(p)
+    return acc
+  }, {})
+
+  const dealerOrder = ['きくや', 'LINE', 'アクティム', '平尾さん', 'Aujua', 'oggi otto', 'マーキス', 'その他']
+  const sortedDealers = [
+    ...dealerOrder.filter(d => grouped[d]),
+    ...Object.keys(grouped).filter(d => !dealerOrder.includes(d)),
+  ]
+
+  function copyText() {
+    const lines: string[] = [`📋 発注リスト（${ym}）\n`]
+    for (const dealer of sortedDealers) {
+      lines.push(`【${dealer}】`)
+      for (const p of grouped[dealer]) {
+        lines.push(`  ${p.brand ? p.brand + ' ' : ''}${p.name}　× ${p.orderQty}`)
+      }
+      lines.push('')
+    }
+    navigator.clipboard.writeText(lines.join('\n'))
+      .then(() => alert('コピーしました'))
+  }
+
+  if (items.length === 0) return (
+    <div className="mx-4 my-4 p-4 rounded-xl bg-green-50 border border-green-200 text-sm text-green-700 text-center">
+      ✅ 発注が必要な商品はありません
+    </div>
+  )
+
+  return (
+    <div className="mx-4 my-4 rounded-xl border border-orange-200 overflow-hidden">
+      {/* ヘッダー */}
+      <div
+        className="flex items-center justify-between px-4 py-3 bg-orange-50 cursor-pointer"
+        onClick={() => setOpen(o => !o)}
+      >
+        <div className="flex items-center gap-2">
+          <span className="text-orange-600 font-bold text-sm">📋 発注リスト</span>
+          <span className="bg-orange-500 text-white text-xs font-bold px-2 py-0.5 rounded-full">{items.length}件</span>
+        </div>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={e => { e.stopPropagation(); copyText() }}
+            className="px-3 py-1 bg-orange-500 text-white text-xs rounded-lg font-medium hover:bg-orange-600"
+          >
+            コピー
+          </button>
+          <span className="text-gray-400 text-sm">{open ? '▲' : '▼'}</span>
+        </div>
+      </div>
+
+      {/* リスト本体 */}
+      {open && (
+        <div className="bg-white divide-y divide-gray-100">
+          {sortedDealers.map(dealer => (
+            <div key={dealer} className="p-3">
+              <div className="text-xs font-bold text-gray-500 mb-2 pb-1 border-b border-gray-100">
+                【{dealer}】{grouped[dealer].length}点
+              </div>
+              <div className="space-y-1">
+                {grouped[dealer].map(p => (
+                  <div key={p.id} className="flex items-center justify-between text-sm">
+                    <div>
+                      {p.brand && <span className="text-xs text-gray-400 mr-1">{p.brand}</span>}
+                      <span className="text-gray-700">{p.name}</span>
+                    </div>
+                    <div className="flex items-center gap-3 text-xs shrink-0 ml-2">
+                      <span className="text-gray-400">在庫{p.currentStock}</span>
+                      <span className="text-gray-400">必要{p.required_qty}</span>
+                      <span className="font-bold text-orange-600 bg-orange-50 px-2 py-0.5 rounded">× {p.orderQty}</span>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   )
 }
