@@ -46,6 +46,8 @@ export default function AdminPage() {
   const [closeDone, setCloseDone] = useState(false)
   const [editCell, setEditCell] = useState<string | null>(null)
   const [editVal, setEditVal] = useState('')
+  const [editReqId, setEditReqId] = useState<number | null>(null)
+  const [editReqVal, setEditReqVal] = useState('')
 
   useEffect(() => {
     Promise.all([
@@ -121,6 +123,14 @@ export default function AdminPage() {
     )
     setEditCell(null)
     loadData()
+  }
+
+  // 必要数の編集
+  async function saveRequiredQty(productId: number) {
+    const qty = parseInt(editReqVal) || 0
+    await supabase.from('products').update({ required_qty: qty }).eq('id', productId)
+    setProducts(prev => prev.map(p => p.id === productId ? { ...p, required_qty: qty } : p))
+    setEditReqId(null)
   }
 
   // 使用ログの種類変更
@@ -201,6 +211,7 @@ export default function AdminPage() {
               <th className="sticky left-0 bg-gray-100 z-10 border border-gray-200 px-1 py-1.5 text-left w-14 min-w-[56px]">ブランド</th>
               <th className="sticky left-14 bg-gray-100 z-10 border border-gray-200 px-1 py-1.5 text-left w-28 min-w-[112px]">品名</th>
               <th className="border border-gray-200 px-1 py-1.5 text-center w-10 min-w-[40px] bg-yellow-50 text-gray-600">繰越</th>
+              <th className="border border-gray-200 px-1 py-1.5 text-center w-10 min-w-[40px] bg-purple-50 text-purple-600">必要</th>
               <th className="border border-gray-200 px-1 py-1.5 text-center w-8 min-w-[32px] text-gray-400 text-[10px]">行</th>
               {days.map(d => {
                 const w = dow(year, month, d)
@@ -236,6 +247,26 @@ export default function AdminPage() {
                       </td>
                       <td className="border border-gray-200 px-1 py-1 text-center bg-yellow-50 font-medium text-gray-700">
                         {carryOver > 0 ? carryOver : ''}
+                      </td>
+                      <td className="border border-gray-200 text-center p-0 bg-purple-50">
+                        {editReqId === p.id ? (
+                          <input
+                            type="number"
+                            value={editReqVal}
+                            onChange={e => setEditReqVal(e.target.value)}
+                            onBlur={() => saveRequiredQty(p.id)}
+                            onKeyDown={e => e.key === 'Enter' && saveRequiredQty(p.id)}
+                            className="w-full text-center text-xs py-1 outline-none bg-purple-100"
+                            autoFocus
+                          />
+                        ) : (
+                          <button
+                            onClick={() => { setEditReqId(p.id); setEditReqVal(String(p.required_qty)) }}
+                            className={`w-full py-1 px-0 text-center text-xs ${p.required_qty > 0 ? 'text-purple-700 font-bold' : 'text-gray-300 hover:bg-purple-50'}`}
+                          >
+                            {p.required_qty > 0 ? p.required_qty : '−'}
+                          </button>
+                        )}
                       </td>
                       <td className="border border-gray-200 px-1 py-1 text-center bg-gray-100 text-[10px] text-gray-400">入庫</td>
                       {days.map(d => {
@@ -279,6 +310,7 @@ export default function AdminPage() {
                     <td className={`sticky left-0 z-10 border border-gray-200 px-1 py-1 ${rowBg}`}></td>
                     <td className={`sticky left-14 z-10 border border-gray-200 px-1 py-1 ${rowBg}`}></td>
                     <td className="border border-gray-200 bg-yellow-50"></td>
+                    <td className="border border-gray-200 bg-purple-50"></td>
                     <td className="border border-gray-200 px-1 py-1 text-center bg-gray-50 text-[10px] text-gray-500 whitespace-nowrap">{store.name}</td>
                     {days.map(d => {
                       const date = toDate(year, month, d)
@@ -316,6 +348,7 @@ export default function AdminPage() {
                       <td className={`sticky left-0 z-10 bg-gray-100 border border-gray-200 px-1 py-1`}></td>
                       <td className={`sticky left-14 z-10 bg-gray-100 border border-gray-200 px-1 py-1`}></td>
                       <td className="border border-gray-200 bg-yellow-100"></td>
+                      <td className="border border-gray-200 bg-purple-50"></td>
                       <td className="border border-gray-200 px-1 py-1 text-center text-[10px] font-bold text-gray-500 bg-gray-200">合計</td>
                       {dayTotals.map((total, i) => (
                         <td key={i} className={`border border-gray-200 px-1 py-1 text-center font-bold ${total > 0 ? 'text-gray-700 bg-gray-200' : ''}`}>
