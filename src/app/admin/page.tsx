@@ -11,6 +11,17 @@ type Product = { id: number; category_id: number; brand: string | null; name: st
 type UsageLog = { id: number; store_id: number; product_id: number; date: string; quantity: number; type: string }
 type Receipt = { id: number; product_id: number; date: string; quantity: number }
 type Balance = { product_id: number; year_month: string; carry_over: number }
+type SessionSummary = { store_id: number; entry_date: string; status: 'draft' | 'completed'; completed_at: string | null }
+type StoreProductSummary = {
+  store_id: number
+  product_id: number
+  opening_stock: number
+  required_qty: number
+  product: { id: number; category_id: number; brand: string | null; name: string }
+}
+type UsageSummary = { store_id: number; product_id: number; quantity: number }
+
+const SYSTEM_START_DATE = '2026-08-21'
 
 const TYPE_CYCLE: Record<string, string> = { '業務': '店販', '店販': '個人', '個人': '業務' }
 const TYPE_COLOR: Record<string, string> = {
@@ -34,6 +45,228 @@ function dow(year: number, month: number, d: number) {
   return ['日','月','火','水','木','金','土'][new Date(year, month-1, d).getDay()]
 }
 
+function normalizeSearch(value: string) {
+  return value.normalize('NFKC').toLocaleLowerCase().replace(/\s+/g, '')
+}
+
+function HqOverview({ stores, categories }: { stores: Store[]; categories: Category[] }) {
+  const [sessions, setSessions] = useState<SessionSummary[]>([])
+  const [assignments, setAssignments] = useState<StoreProductSummary[]>([])
+  const [usage, setUsage] = useState<UsageSummary[]>([])
+  const [selectedView, setSelectedView] = useState<string>('retail')
+  const [search, setSearch] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [editRequiredKey, setEditRequiredKey] = useState('')
+  const [editRequiredValue, setEditRequiredValue] = useState('')
+
+  const todayText = new Date().toLocaleDateString('sv-SE')
+
+  const loadOverview = useCallback(async () => {
+    if (stores.length === 0) return
+    setLoading(true)
+    const [sessionResult, assignmentResult, usageResult] = await Promise.all([
+      supabase.from('inventory_sessions')
+        .select('store_id, entry_date, status, completed_at')
+        .eq('entry_date', todayText),
+      supabase.from('store_products')
+        .select('store_id, product_id, opening_stock, required_qty, products!inner(id, category_id, brand, name)')
+        .eq('is_active', true)
+        .eq('products.is_active', true),
+      supabase.from('usage_logs')
+        .select('store_id, product_id, quantity')
+        .gte('date', SYSTEM_START_DATE),
+    ])
+
+    setSessions((sessionResult.data ?? []) as SessionSummary[])
+    const rows = (assignmentResult.data ?? []).flatMap((row) => {
+      const product = Array.isArray(row.products) ? row.products[0] : row.products
+      return product ? [{
+        store_id: row.store_id,
+        product_id: row.product_id,
+        opening_stock: row.opening_stock,
+        required_qty: row.required_qty,
+        product,
+      } as StoreProductSummary] : []
+    })
+    setAssignments(rows)
+    setUsage((usageResult.data ?? []) as UsageSummary[])
+    setLoading(false)
+  }, [stores, todayText])
+
+  useEffect(() => { void loadOverview() }, [loadOverview])
+
+  const usageMap = useMemo(() => {
+    const map = new Map<string, number>()
+    usage.forEach((item) => {
+      const key = `${item.store_id}_${item.product_id}`
+      map.set(key, (map.get(key) ?? 0) + item.quantity)
+    })
+    return map
+  }, [usage])
+
+  const currentStock = useCallback((row: StoreProductSummary) => (
+    row.opening_stock - (usageMap.get(`${row.store_id}_${row.product_id}`) ?? 0)
+  ), [usageMap])
+
+  async function saveStoreRequired(row: StoreProductSummary) {
+    const quantity = Math.max(0, parseInt(editRequiredValue) || 0)
+    const { error } = await supabase.from('store_products')
+      .update({ required_qty: quantity, updated_at: new Date().toISOString() })
+      .eq('store_id', row.store_id).eq('product_id', row.product_id)
+    if (!error) {
+      setAssignments((previous) => previous.map((item) => (
+        item.store_id === row.store_id && item.product_id === row.product_id
+          ? { ...item, required_qty: quantity }
+          : item
+      )))
+    }
+    setEditRequiredKey('')
+  }
+
+  const normalizedSearch = normalizeSearch(search)
+  const retailCategoryIds = useMemo(() => new Set(
+    categories.filter((category) => /店販|オージュア|aujua/i.test(category.name)).map((category) => category.id)
+  ), [categories])
+  const selectedStoreId = selectedView === 'retail' ? null : Number(selectedView)
+  const storeRows = assignments
+    .filter((row) => selectedStoreId === null || row.store_id === selectedStoreId)
+    .filter((row) => !normalizedSearch || normalizeSearch(`${row.product.brand ?? ''}${row.product.name}`).includes(normalizedSearch))
+    .sort((a, b) => (a.product.brand ?? '').localeCompare(b.product.brand ?? '', 'ja') || a.product.name.localeCompare(b.product.name, 'ja'))
+
+  const retailRows = useMemo(() => {
+    const grouped = new Map<number, { product: StoreProductSummary['product']; rows: StoreProductSummary[] }>()
+    assignments.filter((row) => retailCategoryIds.has(row.product.category_id)).forEach((row) => {
+      const current = grouped.get(row.product_id) ?? { product: row.product, rows: [] }
+      current.rows.push(row)
+      grouped.set(row.product_id, current)
+    })
+    return Array.from(grouped.values())
+      .filter((item) => !normalizedSearch || normalizeSearch(`${item.product.brand ?? ''}${item.product.name}`).includes(normalizedSearch))
+      .sort((a, b) => (a.product.brand ?? '').localeCompare(b.product.brand ?? '', 'ja') || a.product.name.localeCompare(b.product.name, 'ja'))
+  }, [assignments, normalizedSearch, retailCategoryIds])
+
+  return (
+    <section className="mx-3 mt-3 space-y-3">
+      <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+        <div className="mb-3 flex items-center justify-between">
+          <div>
+            <h2 className="font-bold text-gray-800">今日の入力状況</h2>
+            <p className="text-xs text-gray-400">{todayText}</p>
+          </div>
+          <button onClick={() => void loadOverview()} className="rounded-lg bg-gray-100 px-3 py-1.5 text-xs text-gray-600">更新</button>
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          {stores.map((store) => {
+            const storeSessions = sessions.filter((session) => session.store_id === store.id)
+            const completedSession = storeSessions.find((session) => session.status === 'completed')
+            const draftSession = storeSessions.find((session) => session.status === 'draft')
+            const status = completedSession ? '完了' : draftSession ? '下書き' : '未入力'
+            const style = completedSession
+              ? 'border-green-200 bg-green-50 text-green-700'
+              : draftSession
+                ? 'border-amber-200 bg-amber-50 text-amber-700'
+                : 'border-gray-200 bg-gray-50 text-gray-500'
+            return (
+              <Link key={store.id} href={`/${store.id}/input`} className={`rounded-xl border p-3 text-center ${style}`}>
+                <div className="text-sm font-bold">{store.name}</div>
+                <div className="mt-1 text-xs font-medium">{status}</div>
+              </Link>
+            )
+          })}
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+        <div className="border-b border-gray-100 p-4">
+          <h2 className="font-bold text-gray-800">店舗別在庫</h2>
+          <p className="mt-0.5 text-xs text-gray-400">開始在庫からサイトで完了した使用数を差し引いて表示</p>
+          <div className="mt-3 flex gap-1 overflow-x-auto pb-1">
+            <button onClick={() => setSelectedView('retail')}
+              className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-medium ${selectedView === 'retail' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-600'}`}>
+              全店 店販・Aujua
+            </button>
+            {stores.map((store) => (
+              <button key={store.id} onClick={() => setSelectedView(String(store.id))}
+                className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-medium ${selectedView === String(store.id) ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-600'}`}>
+                {store.name}
+              </button>
+            ))}
+          </div>
+          <input type="search" value={search} onChange={(event) => setSearch(event.target.value)}
+            placeholder="商品名・ブランドで検索"
+            className="mt-2 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm outline-none focus:border-blue-400" />
+        </div>
+
+        {loading ? (
+          <p className="py-10 text-center text-sm text-gray-400">読み込み中...</p>
+        ) : selectedView === 'retail' ? (
+          <div className="max-h-[460px] overflow-auto">
+            <table className="w-full min-w-[560px] text-xs">
+              <thead className="sticky top-0 bg-gray-50 text-gray-500">
+                <tr>
+                  <th className="px-3 py-2 text-left">商品</th>
+                  {stores.map((store) => <th key={store.id} className="px-2 py-2 text-center">{store.name}</th>)}
+                  <th className="px-3 py-2 text-center">全店計</th>
+                </tr>
+              </thead>
+              <tbody>
+                {retailRows.map((item) => {
+                  const stockByStore = new Map(item.rows.map((row) => [row.store_id, currentStock(row)]))
+                  const total = Array.from(stockByStore.values()).reduce((sum, value) => sum + value, 0)
+                  return (
+                    <tr key={item.product.id} className="border-t border-gray-100">
+                      <td className="px-3 py-2">
+                        <div className="text-[10px] text-gray-400">{item.product.brand}</div>
+                        <div className="font-medium text-gray-700">{item.product.name}</div>
+                      </td>
+                      {stores.map((store) => <td key={store.id} className="px-2 py-2 text-center font-medium text-gray-700">{stockByStore.get(store.id) ?? '−'}</td>)}
+                      <td className="bg-blue-50 px-3 py-2 text-center font-bold text-blue-700">{total}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+            {retailRows.length === 0 && <p className="py-10 text-center text-sm text-gray-400">該当商品がありません</p>}
+          </div>
+        ) : (
+          <div className="max-h-[460px] overflow-auto">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-gray-50 text-gray-500">
+                <tr><th className="px-3 py-2 text-left">商品</th><th className="px-2 py-2 text-center">現在庫</th><th className="px-2 py-2 text-center">必要数</th><th className="px-3 py-2 text-center">不足</th></tr>
+              </thead>
+              <tbody>
+                {storeRows.map((row) => {
+                  const stock = currentStock(row)
+                  const shortage = Math.max(0, row.required_qty - stock)
+                  const editKey = `${row.store_id}_${row.product_id}`
+                  return (
+                    <tr key={editKey} className="border-t border-gray-100">
+                      <td className="px-3 py-2"><div className="text-[10px] text-gray-400">{row.product.brand}</div><div className="font-medium text-gray-700">{row.product.name}</div></td>
+                      <td className={`px-2 py-2 text-center font-bold ${stock < row.required_qty ? 'text-red-600' : 'text-gray-700'}`}>{stock}</td>
+                      <td className="px-2 py-2 text-center">
+                        {editRequiredKey === editKey ? (
+                          <input type="number" min="0" value={editRequiredValue} onChange={(event) => setEditRequiredValue(event.target.value)}
+                            onBlur={() => void saveStoreRequired(row)} onKeyDown={(event) => event.key === 'Enter' && void saveStoreRequired(row)}
+                            className="w-14 rounded border border-blue-300 px-1 py-1 text-center outline-none" autoFocus />
+                        ) : (
+                          <button onClick={() => { setEditRequiredKey(editKey); setEditRequiredValue(String(row.required_qty)) }}
+                            className="rounded bg-purple-50 px-3 py-1 font-bold text-purple-700">{row.required_qty}</button>
+                        )}
+                      </td>
+                      <td className={`px-3 py-2 text-center font-bold ${shortage > 0 ? 'text-orange-600' : 'text-gray-300'}`}>{shortage > 0 ? shortage : '−'}</td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+            {storeRows.length === 0 && <p className="py-10 text-center text-sm text-gray-400">該当商品がありません</p>}
+          </div>
+        )}
+      </div>
+    </section>
+  )
+}
+
 export default function AdminPage() {
   const router = useRouter()
   const now = new Date()
@@ -51,8 +284,6 @@ export default function AdminPage() {
   const [closeDone, setCloseDone] = useState(false)
   const [editCell, setEditCell] = useState<string | null>(null)
   const [editVal, setEditVal] = useState('')
-  const [editReqId, setEditReqId] = useState<number | null>(null)
-  const [editReqVal, setEditReqVal] = useState('')
 
   useEffect(() => {
     void authorize()
@@ -148,14 +379,6 @@ export default function AdminPage() {
     loadData()
   }
 
-  // 必要数の編集
-  async function saveRequiredQty(productId: number) {
-    const qty = parseInt(editReqVal) || 0
-    await supabase.from('products').update({ required_qty: qty }).eq('id', productId)
-    setProducts(prev => prev.map(p => p.id === productId ? { ...p, required_qty: qty } : p))
-    setEditReqId(null)
-  }
-
   // 使用ログの種類変更
   async function cycleType(log: UsageLog) {
     const nextType = TYPE_CYCLE[log.type] || '業務'
@@ -207,11 +430,11 @@ export default function AdminPage() {
             <button onClick={nextMonth} className="px-2 py-1 rounded border border-gray-200 text-sm">›</button>
           </div>
           <button
-            onClick={handleClose}
-            disabled={closing}
-            className="px-2 py-1 bg-orange-500 text-white rounded text-xs font-medium hover:bg-orange-600 disabled:opacity-50"
+            disabled
+            title="店舗別の月締め処理へ切り替え中です"
+            className="px-2 py-1 bg-gray-200 text-gray-500 rounded text-xs font-medium"
           >
-            {closing ? '処理中...' : closeDone ? '✓ 月締め完了' : '月締め'}
+            月締め（準備中）
           </button>
           <div className="ml-auto flex gap-1 text-xs">
             <span className="px-1.5 py-0.5 rounded bg-blue-100 text-blue-700">業務</span>
@@ -230,7 +453,13 @@ export default function AdminPage() {
         </div>
       </div>
 
+      <HqOverview stores={stores} categories={categories} />
+
       {/* テーブル */}
+      <div className="mx-3 mt-5 mb-2">
+        <h2 className="font-bold text-gray-800">月別使用履歴</h2>
+        <p className="text-xs text-gray-400">商品ごとの入庫・店舗使用数を日別に確認</p>
+      </div>
       <div className="overflow-x-auto" style={{ paddingRight: '80vw' }}>
         <table className="text-xs border-collapse" style={{ tableLayout: 'fixed', width: 'max-content' }}>
           <thead>
@@ -276,24 +505,7 @@ export default function AdminPage() {
                         {carryOver > 0 ? carryOver : ''}
                       </td>
                       <td className="border border-gray-200 text-center p-0 bg-purple-50">
-                        {editReqId === p.id ? (
-                          <input
-                            type="number"
-                            value={editReqVal}
-                            onChange={e => setEditReqVal(e.target.value)}
-                            onBlur={() => saveRequiredQty(p.id)}
-                            onKeyDown={e => e.key === 'Enter' && saveRequiredQty(p.id)}
-                            className="w-full text-center text-xs py-1 outline-none bg-purple-100"
-                            autoFocus
-                          />
-                        ) : (
-                          <button
-                            onClick={() => { setEditReqId(p.id); setEditReqVal(String(p.required_qty)) }}
-                            className={`w-full py-1 px-0 text-center text-xs ${p.required_qty > 0 ? 'text-purple-700 font-bold' : 'text-gray-300 hover:bg-purple-50'}`}
-                          >
-                            {p.required_qty > 0 ? p.required_qty : '−'}
-                          </button>
-                        )}
+                        <span className="text-[9px] text-purple-500">店舗別</span>
                       </td>
                       <td className="border border-gray-200 px-1 py-1 text-center bg-gray-100 text-[10px] text-gray-400">入庫</td>
                       {days.map(d => {
@@ -314,8 +526,9 @@ export default function AdminPage() {
                               />
                             ) : (
                               <button
-                                onClick={() => handleReceiptEdit(p.id, d)}
-                                className={`w-full h-full py-1 px-0 text-center ${rec && rec.quantity > 0 ? 'bg-green-100 text-green-700 font-bold' : 'hover:bg-green-50 text-gray-300'}`}
+                                disabled
+                                title="店舗別の入荷入力画面へ切り替え中です"
+                                className={`w-full h-full py-1 px-0 text-center ${rec && rec.quantity > 0 ? 'bg-green-100 text-green-700 font-bold' : 'text-gray-200'}`}
                               >
                                 {rec && rec.quantity > 0 ? rec.quantity : ''}
                               </button>
@@ -396,13 +609,10 @@ export default function AdminPage() {
       </div>
 
       {/* 凡例 */}
-      <div className="px-4 pt-3 pb-1 text-xs text-gray-400 flex gap-4">
-        <span>🟩 入庫（タップで編集）</span>
+      <div className="px-4 pt-3 pb-4 text-xs text-gray-400 flex gap-4">
+        <span>入庫・月締めは店舗別の新画面へ切り替え中です</span>
         <span>数字タップで種類切替：<span className="text-blue-600">業務</span>→<span className="text-green-600">店販</span>→<span className="text-amber-600">個人</span></span>
       </div>
-
-      {/* 発注リスト */}
-      <OrderList products={products} balances={balances} receipts={receipts} logs={logs} ym={ym} />
     </div>
   )
 }
