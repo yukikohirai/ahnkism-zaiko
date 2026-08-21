@@ -1,6 +1,7 @@
 'use client'
 import { useEffect, useMemo, useState, use } from 'react'
 import { useRouter } from 'next/navigation'
+import { getCurrentProfile, type UserProfile } from '@/lib/auth'
 import { supabase, type Store, type Category, type Product } from '@/lib/supabase'
 
 type ProductWithQty = Product & { qty: number }
@@ -17,6 +18,7 @@ function normalizeSearch(value: string) {
 export default function InputPage({ params }: { params: Promise<{ storeId: string }> }) {
   const { storeId } = use(params)
   const router = useRouter()
+  const [profile, setProfile] = useState<UserProfile | null>(null)
   const [store, setStore] = useState<Store | null>(null)
   const [categories, setCategories] = useState<Category[]>([])
   const [activeCat, setActiveCat] = useState<number | null>(null)
@@ -29,6 +31,24 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
   const [showConfirm, setShowConfirm] = useState(false)
 
   useEffect(() => {
+    void authorize()
+  }, [storeId])
+
+  async function authorize() {
+    const currentProfile = await getCurrentProfile()
+    if (!currentProfile) {
+      router.replace('/')
+      return
+    }
+    if (currentProfile.role === 'store' && currentProfile.store_id !== Number(storeId)) {
+      router.replace(`/${currentProfile.store_id}/input`)
+      return
+    }
+    setProfile(currentProfile)
+  }
+
+  useEffect(() => {
+    if (!profile) return
     supabase.from('stores').select('*').eq('id', storeId).single().then(({ data }) => {
       if (data) setStore(data)
     })
@@ -52,10 +72,10 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
       setCategories(availableCategories)
       setActiveCat(availableCategories[0]?.id ?? null)
     })
-  }, [storeId])
+  }, [storeId, profile])
 
   useEffect(() => {
-    if (!activeCat) return
+    if (!activeCat || !profile) return
     supabase
       .from('store_products')
       .select('required_qty, sort_order, products!inner(*)')
@@ -75,7 +95,12 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
           loadRecentUsage(availableProducts.map((p) => p.id))
         }
       })
-  }, [activeCat, date, storeId])
+  }, [activeCat, date, storeId, profile])
+
+  async function handleLogout() {
+    await supabase.auth.signOut()
+    router.replace('/')
+  }
 
   async function loadExisting(productIds: number[]) {
     const { data } = await supabase
@@ -167,7 +192,11 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
       {/* ヘッダー */}
       <div className="sticky top-0 z-10 bg-white shadow-sm">
         <div className="flex items-center justify-between px-4 py-3">
-          <button onClick={() => router.push('/')} className="text-gray-400 text-2xl leading-none">‹</button>
+          {profile?.role === 'hq' ? (
+            <button onClick={() => router.push('/')} className="text-gray-400 text-2xl leading-none">‹</button>
+          ) : (
+            <div className="w-6" />
+          )}
           <div className="text-center">
             <div className="font-bold text-gray-800">{store.name}</div>
             <input
@@ -177,7 +206,7 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
               className="text-xs text-blue-600 text-center border-none outline-none bg-transparent"
             />
           </div>
-          <div className="w-6" />
+          <button onClick={handleLogout} className="text-xs text-gray-400 underline">退出</button>
         </div>
         {/* カテゴリタブ */}
         <div className="flex overflow-x-auto gap-1 px-3 pb-2 scrollbar-hide">

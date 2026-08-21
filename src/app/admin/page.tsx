@@ -1,5 +1,8 @@
 'use client'
 import { useEffect, useState, useMemo, useCallback } from 'react'
+import Link from 'next/link'
+import { useRouter } from 'next/navigation'
+import { getCurrentProfile } from '@/lib/auth'
 import { supabase } from '@/lib/supabase'
 
 type Store = { id: number; name: string }
@@ -32,7 +35,9 @@ function dow(year: number, month: number, d: number) {
 }
 
 export default function AdminPage() {
+  const router = useRouter()
   const now = new Date()
+  const [authorized, setAuthorized] = useState(false)
   const [stores, setStores] = useState<Store[]>([])
   const [categories, setCategories] = useState<Category[]>([])
   const [products, setProducts] = useState<Product[]>([])
@@ -50,6 +55,24 @@ export default function AdminPage() {
   const [editReqVal, setEditReqVal] = useState('')
 
   useEffect(() => {
+    void authorize()
+  }, [])
+
+  async function authorize() {
+    const profile = await getCurrentProfile()
+    if (!profile) {
+      router.replace('/')
+      return
+    }
+    if (profile.role !== 'hq') {
+      router.replace(`/${profile.store_id}/input`)
+      return
+    }
+    setAuthorized(true)
+  }
+
+  useEffect(() => {
+    if (!authorized) return
     Promise.all([
       supabase.from('stores').select('*').order('sort_order'),
       supabase.from('categories').select('*').order('sort_order'),
@@ -57,13 +80,13 @@ export default function AdminPage() {
       if (s.data) setStores(s.data)
       if (c.data) { setCategories(c.data); setSelectedCat(c.data[0]?.id ?? null) }
     })
-  }, [])
+  }, [authorized])
 
   useEffect(() => {
-    if (!selectedCat) return
+    if (!selectedCat || !authorized) return
     supabase.from('products').select('*').eq('category_id', selectedCat).order('sort_order')
       .then(({ data }) => { if (data) setProducts(data) })
-  }, [selectedCat])
+  }, [selectedCat, authorized])
 
   const loadData = useCallback(() => {
     if (!selectedCat || products.length === 0) return
@@ -167,13 +190,17 @@ export default function AdminPage() {
 
   const ym = toYM(year, month)
 
+  if (!authorized) {
+    return <div className="flex min-h-screen items-center justify-center text-gray-400">権限を確認しています...</div>
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* ヘッダー */}
       <div className="bg-white border-b sticky top-0 z-20 shadow-sm">
         <div className="px-3 py-2 flex items-center gap-2 flex-wrap">
           <h1 className="text-base font-bold text-gray-800 shrink-0">管理</h1>
-          <a href="/" className="text-xs text-blue-500 shrink-0">← 入力</a>
+          <Link href="/" className="text-xs text-blue-500 shrink-0">← 入力</Link>
           <div className="flex items-center gap-1">
             <button onClick={prevMonth} className="px-2 py-1 rounded border border-gray-200 text-sm">‹</button>
             <span className="text-sm font-medium px-1">{year}年{month}月</span>
