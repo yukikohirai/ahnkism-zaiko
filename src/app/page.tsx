@@ -1,71 +1,118 @@
 'use client'
+
+import Link from 'next/link'
 import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
+import { emailForLoginId, getCurrentProfile, type UserProfile } from '@/lib/auth'
 import { supabase, type Store } from '@/lib/supabase'
-
-const PASS_KEY = 'ahnkism_auth'
-const CORRECT_ID = 'ahnkism_2026'
-const CORRECT_PASS = 'zaiko_2026'
 
 export default function Home() {
   const router = useRouter()
   const [stores, setStores] = useState<Store[]>([])
-  const [authed, setAuthed] = useState(false)
+  const [profile, setProfile] = useState<UserProfile | null>(null)
+  const [loading, setLoading] = useState(true)
   const [inputId, setInputId] = useState('')
-  const [input, setInput] = useState('')
+  const [password, setPassword] = useState('')
+  const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState(false)
 
   useEffect(() => {
-    if (localStorage.getItem(PASS_KEY) === '1') setAuthed(true)
+    void restoreSession()
   }, [])
 
-  useEffect(() => {
-    if (!authed) return
-    supabase.from('stores').select('*').order('sort_order').then(({ data }) => {
-      if (data) setStores(data)
-    })
-  }, [authed])
-
-  function handleLogin(e: React.FormEvent) {
-    e.preventDefault()
-    if (inputId === CORRECT_ID && input === CORRECT_PASS) {
-      localStorage.setItem(PASS_KEY, '1')
-      setAuthed(true)
-      setError(false)
-    } else {
-      setError(true)
+  async function restoreSession() {
+    const currentProfile = await getCurrentProfile()
+    if (!currentProfile) {
+      setLoading(false)
+      return
     }
+    await enterForProfile(currentProfile)
   }
 
-  if (!authed) {
+  async function enterForProfile(currentProfile: UserProfile) {
+    if (currentProfile.role === 'store' && currentProfile.store_id) {
+      router.replace(`/${currentProfile.store_id}/input`)
+      return
+    }
+
+    setProfile(currentProfile)
+    const { data } = await supabase.from('stores').select('*').order('sort_order')
+    if (data) setStores(data)
+    setLoading(false)
+  }
+
+  async function handleLogin(event: React.FormEvent) {
+    event.preventDefault()
+    const email = emailForLoginId(inputId)
+    if (!email) {
+      setError(true)
+      return
+    }
+
+    setSubmitting(true)
+    setError(false)
+    const { error: signInError } = await supabase.auth.signInWithPassword({ email, password })
+    if (signInError) {
+      setSubmitting(false)
+      setError(true)
+      return
+    }
+
+    const currentProfile = await getCurrentProfile()
+    if (!currentProfile) {
+      await supabase.auth.signOut()
+      setSubmitting(false)
+      setError(true)
+      return
+    }
+    await enterForProfile(currentProfile)
+    setSubmitting(false)
+  }
+
+  async function handleLogout() {
+    await supabase.auth.signOut()
+    setProfile(null)
+    setStores([])
+    setPassword('')
+    setLoading(false)
+  }
+
+  if (loading) {
+    return <main className="flex min-h-screen items-center justify-center text-gray-400">ログインを確認しています...</main>
+  }
+
+  if (!profile) {
     return (
-      <main className="flex flex-col items-center justify-center min-h-screen p-6">
+      <main className="flex min-h-screen flex-col items-center justify-center p-6">
         <div className="w-full max-w-sm">
-          <h1 className="text-2xl font-bold text-center mb-2 text-gray-800">アンキシム 在庫管理</h1>
-          <p className="text-center text-gray-500 mb-8 text-sm">パスワードを入力してください</p>
+          <h1 className="mb-2 text-center text-2xl font-bold text-gray-800">アンキシム 在庫管理</h1>
+          <p className="mb-8 text-center text-sm text-gray-500">店舗または本部のアカウントでログイン</p>
           <form onSubmit={handleLogin} className="flex flex-col gap-3">
             <input
               type="text"
               value={inputId}
-              onChange={(e) => { setInputId(e.target.value); setError(false) }}
+              onChange={(event) => { setInputId(event.target.value); setError(false) }}
               placeholder="ログインID"
-              className="w-full border-2 border-gray-200 rounded-2xl py-4 px-5 text-lg text-center outline-none focus:border-blue-400"
               autoFocus
               autoCapitalize="none"
+              autoComplete="username"
+              className="w-full rounded-2xl border-2 border-gray-200 px-5 py-4 text-center text-lg outline-none focus:border-blue-400"
             />
             <input
               type="password"
-              value={input}
-              onChange={(e) => { setInput(e.target.value); setError(false) }}
+              value={password}
+              onChange={(event) => { setPassword(event.target.value); setError(false) }}
               placeholder="パスワード"
-              className="w-full border-2 border-gray-200 rounded-2xl py-4 px-5 text-lg text-center outline-none focus:border-blue-400"
+              autoComplete="current-password"
+              className="w-full rounded-2xl border-2 border-gray-200 px-5 py-4 text-center text-lg outline-none focus:border-blue-400"
             />
-            {error && <p className="text-center text-red-500 text-sm">パスワードが違います</p>}
+            {error && <p className="text-center text-sm text-red-500">ログインIDまたはパスワードが違います</p>}
             <button
               type="submit"
-              className="w-full bg-blue-500 text-white rounded-2xl py-4 text-lg font-bold active:bg-blue-600"
+              disabled={submitting}
+              className="w-full rounded-2xl bg-blue-500 py-4 text-lg font-bold text-white disabled:opacity-50"
             >
-              ログイン
+              {submitting ? 'ログイン中...' : 'ログイン'}
             </button>
           </form>
         </div>
@@ -74,23 +121,24 @@ export default function Home() {
   }
 
   return (
-    <main className="flex flex-col items-center justify-center min-h-screen p-6">
+    <main className="flex min-h-screen flex-col items-center justify-center p-6">
       <div className="w-full max-w-sm">
-        <h1 className="text-2xl font-bold text-center mb-2 text-gray-800">アンキシム 在庫管理</h1>
-        <p className="text-center text-gray-500 mb-8 text-sm">店舗を選んでください</p>
+        <h1 className="mb-2 text-center text-2xl font-bold text-gray-800">アンキシム 在庫管理</h1>
+        <p className="mb-8 text-center text-sm text-gray-500">本部：確認する店舗を選択</p>
         <div className="flex flex-col gap-3">
           {stores.map((store) => (
             <button
               key={store.id}
               onClick={() => router.push(`/${store.id}/input`)}
-              className="w-full bg-white border-2 border-gray-200 rounded-2xl py-5 text-xl font-semibold text-gray-700 hover:border-blue-400 hover:text-blue-600 active:bg-blue-50 transition-all shadow-sm"
+              className="w-full rounded-2xl border-2 border-gray-200 bg-white py-5 text-xl font-semibold text-gray-700 shadow-sm transition-all hover:border-blue-400 hover:text-blue-600"
             >
               {store.name}
             </button>
           ))}
         </div>
-        <div className="mt-12 text-center">
-          <a href="/admin" className="text-xs text-gray-400 underline">管理者ページ</a>
+        <div className="mt-10 flex items-center justify-center gap-5 text-xs">
+          <Link href="/admin" className="text-blue-600 underline">本部管理ページ</Link>
+          <button onClick={handleLogout} className="text-gray-400 underline">ログアウト</button>
         </div>
       </div>
     </main>
