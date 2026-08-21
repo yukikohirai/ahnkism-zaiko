@@ -1,9 +1,10 @@
 'use client'
-import { useEffect, useState, use } from 'react'
+import { useEffect, useMemo, useState, use } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase, type Store, type Category, type Product } from '@/lib/supabase'
 
 type ProductWithQty = Product & { qty: number }
+type RecentUsage = { product_id: number; date: string; quantity: number }
 
 function today() {
   return new Date().toLocaleDateString('sv-SE')
@@ -16,6 +17,8 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
   const [categories, setCategories] = useState<Category[]>([])
   const [activeCat, setActiveCat] = useState<number | null>(null)
   const [products, setProducts] = useState<ProductWithQty[]>([])
+  const [recentUsage, setRecentUsage] = useState<RecentUsage[]>([])
+  const [search, setSearch] = useState('')
   const [date, setDate] = useState(today())
   const [saving, setSaving] = useState(false)
   const [done, setDone] = useState(false)
@@ -44,6 +47,7 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
         if (data) {
           setProducts(data.map((p) => ({ ...p, qty: 0 })))
           loadExisting(data.map((p) => p.id))
+          loadRecentUsage(data.map((p) => p.id))
         }
       })
   }, [activeCat, date, storeId])
@@ -63,6 +67,20 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
         })
       )
     }
+  }
+
+  async function loadRecentUsage(productIds: number[]) {
+    const since = new Date()
+    since.setDate(since.getDate() - 60)
+    const { data } = await supabase
+      .from('usage_logs')
+      .select('product_id, date, quantity')
+      .eq('store_id', storeId)
+      .in('product_id', productIds)
+      .gte('date', since.toLocaleDateString('sv-SE'))
+      .gt('quantity', 0)
+      .order('date', { ascending: false })
+    if (data) setRecentUsage(data)
   }
 
   function adjust(id: number, delta: number) {
@@ -88,6 +106,34 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
   }
 
   const hasInput = products.some((p) => p.qty > 0)
+  const usageRank = useMemo(() => {
+    const map = new Map<number, { count: number; lastDate: string }>()
+    recentUsage.forEach((usage) => {
+      const current = map.get(usage.product_id) ?? { count: 0, lastDate: '' }
+      map.set(usage.product_id, {
+        count: current.count + usage.quantity,
+        lastDate: current.lastDate > usage.date ? current.lastDate : usage.date,
+      })
+    })
+    return map
+  }, [recentUsage])
+  const displayedProducts = useMemo(() => {
+    const normalized = search.trim().toLocaleLowerCase()
+    return products
+      .filter((product) => {
+        if (!normalized) return true
+        return [product.name, product.brand ?? ''].some((value) => value.toLocaleLowerCase().includes(normalized))
+      })
+      .sort((a, b) => {
+        const aRank = usageRank.get(a.id)
+        const bRank = usageRank.get(b.id)
+        if (!aRank && !bRank) return 0
+        if (!aRank) return 1
+        if (!bRank) return -1
+        if (aRank.lastDate !== bRank.lastDate) return bRank.lastDate.localeCompare(aRank.lastDate)
+        return bRank.count - aRank.count
+      })
+  }, [products, search, usageRank])
 
   if (!store) return <div className="flex items-center justify-center min-h-screen text-gray-400">読み込み中...</div>
 
@@ -128,10 +174,26 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
 
       {/* 商品リスト */}
       <div className="px-4 pt-3">
+        <label className="block mb-3">
+          <span className="sr-only">商品を検索</span>
+          <input
+            type="search"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            placeholder="商品名・ブランドで検索"
+            className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm outline-none focus:border-blue-400 focus:bg-white"
+          />
+        </label>
+        {recentUsage.length > 0 && !search && (
+          <p className="mb-2 text-xs font-medium text-blue-600">最近入力した商品を上に表示しています</p>
+        )}
         {products.length === 0 && (
           <p className="text-center text-gray-400 py-12">商品データがありません</p>
         )}
-        {products.map((product) => (
+        {products.length > 0 && displayedProducts.length === 0 && (
+          <p className="text-center text-gray-400 py-12">該当する商品がありません</p>
+        )}
+        {displayedProducts.map((product) => (
           <div key={product.id} className="flex items-center justify-between py-3 border-b border-gray-100">
             <div className="flex-1 min-w-0 mr-3">
               {product.brand && <div className="text-xs text-gray-400">{product.brand}</div>}
