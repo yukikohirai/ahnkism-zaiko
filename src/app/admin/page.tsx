@@ -1,5 +1,8 @@
 'use client'
 import { useEffect, useState, useMemo, useCallback } from 'react'
+import Link from 'next/link'
+import { useRouter } from 'next/navigation'
+import { getCurrentProfile } from '@/lib/auth'
 import { supabase } from '@/lib/supabase'
 
 type Store = { id: number; name: string }
@@ -32,7 +35,9 @@ function dow(year: number, month: number, d: number) {
 }
 
 export default function AdminPage() {
+  const router = useRouter()
   const now = new Date()
+  const [authorized, setAuthorized] = useState(false)
   const [stores, setStores] = useState<Store[]>([])
   const [categories, setCategories] = useState<Category[]>([])
   const [products, setProducts] = useState<Product[]>([])
@@ -46,8 +51,28 @@ export default function AdminPage() {
   const [closeDone, setCloseDone] = useState(false)
   const [editCell, setEditCell] = useState<string | null>(null)
   const [editVal, setEditVal] = useState('')
+  const [editReqId, setEditReqId] = useState<number | null>(null)
+  const [editReqVal, setEditReqVal] = useState('')
 
   useEffect(() => {
+    void authorize()
+  }, [])
+
+  async function authorize() {
+    const profile = await getCurrentProfile()
+    if (!profile) {
+      router.replace('/')
+      return
+    }
+    if (profile.role !== 'hq') {
+      router.replace(`/${profile.store_id}/input`)
+      return
+    }
+    setAuthorized(true)
+  }
+
+  useEffect(() => {
+    if (!authorized) return
     Promise.all([
       supabase.from('stores').select('*').order('sort_order'),
       supabase.from('categories').select('*').order('sort_order'),
@@ -55,13 +80,13 @@ export default function AdminPage() {
       if (s.data) setStores(s.data)
       if (c.data) { setCategories(c.data); setSelectedCat(c.data[0]?.id ?? null) }
     })
-  }, [])
+  }, [authorized])
 
   useEffect(() => {
-    if (!selectedCat) return
+    if (!selectedCat || !authorized) return
     supabase.from('products').select('*').eq('category_id', selectedCat).order('sort_order')
       .then(({ data }) => { if (data) setProducts(data) })
-  }, [selectedCat])
+  }, [selectedCat, authorized])
 
   const loadData = useCallback(() => {
     if (!selectedCat || products.length === 0) return
@@ -123,6 +148,14 @@ export default function AdminPage() {
     loadData()
   }
 
+  // 必要数の編集
+  async function saveRequiredQty(productId: number) {
+    const qty = parseInt(editReqVal) || 0
+    await supabase.from('products').update({ required_qty: qty }).eq('id', productId)
+    setProducts(prev => prev.map(p => p.id === productId ? { ...p, required_qty: qty } : p))
+    setEditReqId(null)
+  }
+
   // 使用ログの種類変更
   async function cycleType(log: UsageLog) {
     const nextType = TYPE_CYCLE[log.type] || '業務'
@@ -157,13 +190,17 @@ export default function AdminPage() {
 
   const ym = toYM(year, month)
 
+  if (!authorized) {
+    return <div className="flex min-h-screen items-center justify-center text-gray-400">権限を確認しています...</div>
+  }
+
   return (
     <div className="min-h-screen bg-gray-50">
       {/* ヘッダー */}
       <div className="bg-white border-b sticky top-0 z-20 shadow-sm">
         <div className="px-3 py-2 flex items-center gap-2 flex-wrap">
           <h1 className="text-base font-bold text-gray-800 shrink-0">管理</h1>
-          <a href="/" className="text-xs text-blue-500 shrink-0">← 入力</a>
+          <Link href="/" className="text-xs text-blue-500 shrink-0">← 入力</Link>
           <div className="flex items-center gap-1">
             <button onClick={prevMonth} className="px-2 py-1 rounded border border-gray-200 text-sm">‹</button>
             <span className="text-sm font-medium px-1">{year}年{month}月</span>
@@ -201,6 +238,7 @@ export default function AdminPage() {
               <th className="sticky left-0 bg-gray-100 z-10 border border-gray-200 px-1 py-1.5 text-left w-14 min-w-[56px]">ブランド</th>
               <th className="sticky left-14 bg-gray-100 z-10 border border-gray-200 px-1 py-1.5 text-left w-28 min-w-[112px]">品名</th>
               <th className="border border-gray-200 px-1 py-1.5 text-center w-10 min-w-[40px] bg-yellow-50 text-gray-600">繰越</th>
+              <th className="border border-gray-200 px-1 py-1.5 text-center w-10 min-w-[40px] bg-purple-50 text-purple-600">必要</th>
               <th className="border border-gray-200 px-1 py-1.5 text-center w-8 min-w-[32px] text-gray-400 text-[10px]">行</th>
               {days.map(d => {
                 const w = dow(year, month, d)
@@ -236,6 +274,26 @@ export default function AdminPage() {
                       </td>
                       <td className="border border-gray-200 px-1 py-1 text-center bg-yellow-50 font-medium text-gray-700">
                         {carryOver > 0 ? carryOver : ''}
+                      </td>
+                      <td className="border border-gray-200 text-center p-0 bg-purple-50">
+                        {editReqId === p.id ? (
+                          <input
+                            type="number"
+                            value={editReqVal}
+                            onChange={e => setEditReqVal(e.target.value)}
+                            onBlur={() => saveRequiredQty(p.id)}
+                            onKeyDown={e => e.key === 'Enter' && saveRequiredQty(p.id)}
+                            className="w-full text-center text-xs py-1 outline-none bg-purple-100"
+                            autoFocus
+                          />
+                        ) : (
+                          <button
+                            onClick={() => { setEditReqId(p.id); setEditReqVal(String(p.required_qty)) }}
+                            className={`w-full py-1 px-0 text-center text-xs ${p.required_qty > 0 ? 'text-purple-700 font-bold' : 'text-gray-300 hover:bg-purple-50'}`}
+                          >
+                            {p.required_qty > 0 ? p.required_qty : '−'}
+                          </button>
+                        )}
                       </td>
                       <td className="border border-gray-200 px-1 py-1 text-center bg-gray-100 text-[10px] text-gray-400">入庫</td>
                       {days.map(d => {
@@ -279,6 +337,7 @@ export default function AdminPage() {
                     <td className={`sticky left-0 z-10 border border-gray-200 px-1 py-1 ${rowBg}`}></td>
                     <td className={`sticky left-14 z-10 border border-gray-200 px-1 py-1 ${rowBg}`}></td>
                     <td className="border border-gray-200 bg-yellow-50"></td>
+                    <td className="border border-gray-200 bg-purple-50"></td>
                     <td className="border border-gray-200 px-1 py-1 text-center bg-gray-50 text-[10px] text-gray-500 whitespace-nowrap">{store.name}</td>
                     {days.map(d => {
                       const date = toDate(year, month, d)
@@ -316,6 +375,7 @@ export default function AdminPage() {
                       <td className={`sticky left-0 z-10 bg-gray-100 border border-gray-200 px-1 py-1`}></td>
                       <td className={`sticky left-14 z-10 bg-gray-100 border border-gray-200 px-1 py-1`}></td>
                       <td className="border border-gray-200 bg-yellow-100"></td>
+                      <td className="border border-gray-200 bg-purple-50"></td>
                       <td className="border border-gray-200 px-1 py-1 text-center text-[10px] font-bold text-gray-500 bg-gray-200">合計</td>
                       {dayTotals.map((total, i) => (
                         <td key={i} className={`border border-gray-200 px-1 py-1 text-center font-bold ${total > 0 ? 'text-gray-700 bg-gray-200' : ''}`}>
