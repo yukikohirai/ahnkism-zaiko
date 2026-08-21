@@ -423,6 +423,7 @@ export default function AdminPage() {
           <h1 className="text-base font-bold text-gray-800 shrink-0">管理</h1>
           <Link href="/" className="text-xs text-blue-500 shrink-0">← 入力</Link>
           <Link href="/admin/operations" className="rounded bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 shrink-0">入出庫</Link>
+          <Link href="/admin/products" className="rounded bg-purple-50 px-2 py-1 text-xs font-medium text-purple-700 shrink-0">商品管理</Link>
           <div className="flex items-center gap-1">
             <button onClick={prevMonth} className="px-2 py-1 rounded border border-gray-200 text-sm">‹</button>
             <span className="text-sm font-medium px-1">{year}年{month}月</span>
