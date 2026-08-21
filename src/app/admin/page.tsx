@@ -19,9 +19,7 @@ type StoreProductSummary = {
   required_qty: number
   product: { id: number; category_id: number; brand: string | null; name: string }
 }
-type UsageSummary = { store_id: number; product_id: number; quantity: number }
-
-const SYSTEM_START_DATE = '2026-08-21'
+type MovementSummary = { store_id: number; product_id: number; quantity: number }
 
 const TYPE_CYCLE: Record<string, string> = { '業務': '店販', '店販': '個人', '個人': '業務' }
 const TYPE_COLOR: Record<string, string> = {
@@ -52,7 +50,7 @@ function normalizeSearch(value: string) {
 function HqOverview({ stores, categories }: { stores: Store[]; categories: Category[] }) {
   const [sessions, setSessions] = useState<SessionSummary[]>([])
   const [assignments, setAssignments] = useState<StoreProductSummary[]>([])
-  const [usage, setUsage] = useState<UsageSummary[]>([])
+  const [movements, setMovements] = useState<MovementSummary[]>([])
   const [selectedView, setSelectedView] = useState<string>('retail')
   const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
@@ -72,9 +70,9 @@ function HqOverview({ stores, categories }: { stores: Store[]; categories: Categ
         .select('store_id, product_id, opening_stock, required_qty, products!inner(id, category_id, brand, name)')
         .eq('is_active', true)
         .eq('products.is_active', true),
-      supabase.from('usage_logs')
+      supabase.from('inventory_movements')
         .select('store_id, product_id, quantity')
-        .gte('date', SYSTEM_START_DATE),
+        .order('created_at'),
     ])
 
     setSessions((sessionResult.data ?? []) as SessionSummary[])
@@ -89,24 +87,24 @@ function HqOverview({ stores, categories }: { stores: Store[]; categories: Categ
       } as StoreProductSummary] : []
     })
     setAssignments(rows)
-    setUsage((usageResult.data ?? []) as UsageSummary[])
+    setMovements((usageResult.data ?? []) as MovementSummary[])
     setLoading(false)
   }, [stores, todayText])
 
   useEffect(() => { void loadOverview() }, [loadOverview])
 
-  const usageMap = useMemo(() => {
+  const movementMap = useMemo(() => {
     const map = new Map<string, number>()
-    usage.forEach((item) => {
+    movements.forEach((item) => {
       const key = `${item.store_id}_${item.product_id}`
       map.set(key, (map.get(key) ?? 0) + item.quantity)
     })
     return map
-  }, [usage])
+  }, [movements])
 
   const currentStock = useCallback((row: StoreProductSummary) => (
-    row.opening_stock - (usageMap.get(`${row.store_id}_${row.product_id}`) ?? 0)
-  ), [usageMap])
+    row.opening_stock + (movementMap.get(`${row.store_id}_${row.product_id}`) ?? 0)
+  ), [movementMap])
 
   async function saveStoreRequired(row: StoreProductSummary) {
     const quantity = Math.max(0, parseInt(editRequiredValue) || 0)
@@ -179,7 +177,7 @@ function HqOverview({ stores, categories }: { stores: Store[]; categories: Categ
       <div className="rounded-2xl border border-gray-200 bg-white shadow-sm">
         <div className="border-b border-gray-100 p-4">
           <h2 className="font-bold text-gray-800">店舗別在庫</h2>
-          <p className="mt-0.5 text-xs text-gray-400">開始在庫からサイトで完了した使用数を差し引いて表示</p>
+          <p className="mt-0.5 text-xs text-gray-400">開始在庫に使用・入荷・店舗移動を反映して表示</p>
           <div className="mt-3 flex gap-1 overflow-x-auto pb-1">
             <button onClick={() => setSelectedView('retail')}
               className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-medium ${selectedView === 'retail' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-600'}`}>
@@ -424,6 +422,7 @@ export default function AdminPage() {
         <div className="px-3 py-2 flex items-center gap-2 flex-wrap">
           <h1 className="text-base font-bold text-gray-800 shrink-0">管理</h1>
           <Link href="/" className="text-xs text-blue-500 shrink-0">← 入力</Link>
+          <Link href="/admin/operations" className="rounded bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 shrink-0">入出庫</Link>
           <div className="flex items-center gap-1">
             <button onClick={prevMonth} className="px-2 py-1 rounded border border-gray-200 text-sm">‹</button>
             <span className="text-sm font-medium px-1">{year}年{month}月</span>

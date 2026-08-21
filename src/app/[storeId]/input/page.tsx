@@ -92,6 +92,17 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
       .maybeSingle()
 
     if (!openSession) {
+      const completedToday = await supabase
+        .from('inventory_sessions')
+        .select('*')
+        .eq('store_id', Number(storeId))
+        .eq('entry_date', today())
+        .eq('status', 'completed')
+        .maybeSingle()
+      openSession = completedToday.data
+    }
+
+    if (!openSession) {
       const inserted = await supabase
         .from('inventory_sessions')
         .insert({ store_id: Number(storeId), entry_date: today(), status: 'draft' })
@@ -115,6 +126,7 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
 
     setSession(openSession as InventorySession)
     setDate(openSession.entry_date)
+    setCompleted(openSession.status === 'completed')
     const [itemResult, confirmationResult] = await Promise.all([
       supabase.from('inventory_session_items').select('product_id, quantity').eq('session_id', openSession.id),
       supabase.from('inventory_session_categories').select('category_id').eq('session_id', openSession.id),
