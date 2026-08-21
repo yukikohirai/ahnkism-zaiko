@@ -10,6 +10,10 @@ function today() {
   return new Date().toLocaleDateString('sv-SE')
 }
 
+function normalizeSearch(value: string) {
+  return value.normalize('NFKC').toLocaleLowerCase().replace(/\s+/g, '')
+}
+
 export default function InputPage({ params }: { params: Promise<{ storeId: string }> }) {
   const { storeId } = use(params)
   const router = useRouter()
@@ -28,26 +32,47 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
     supabase.from('stores').select('*').eq('id', storeId).single().then(({ data }) => {
       if (data) setStore(data)
     })
-    supabase.from('categories').select('*').order('sort_order').then(({ data }) => {
-      if (data) {
-        setCategories(data)
-        setActiveCat(data[0]?.id ?? null)
-      }
+    Promise.all([
+      supabase.from('categories').select('*').order('sort_order'),
+      supabase
+        .from('store_products')
+        .select('products!inner(category_id)')
+        .eq('store_id', Number(storeId))
+        .eq('is_active', true)
+        .eq('products.is_active', true),
+    ]).then(([categoryResult, assignmentResult]) => {
+      if (!categoryResult.data) return
+      const assignedCategoryIds = new Set(
+        (assignmentResult.data ?? []).flatMap((row) => {
+          const product = Array.isArray(row.products) ? row.products[0] : row.products
+          return product ? [product.category_id] : []
+        })
+      )
+      const availableCategories = categoryResult.data.filter((category) => assignedCategoryIds.has(category.id))
+      setCategories(availableCategories)
+      setActiveCat(availableCategories[0]?.id ?? null)
     })
   }, [storeId])
 
   useEffect(() => {
     if (!activeCat) return
     supabase
-      .from('products')
-      .select('*')
-      .eq('category_id', activeCat)
+      .from('store_products')
+      .select('required_qty, sort_order, products!inner(*)')
+      .eq('store_id', Number(storeId))
+      .eq('is_active', true)
+      .eq('products.category_id', activeCat)
+      .eq('products.is_active', true)
       .order('sort_order')
       .then(({ data }) => {
         if (data) {
-          setProducts(data.map((p) => ({ ...p, qty: 0 })))
-          loadExisting(data.map((p) => p.id))
-          loadRecentUsage(data.map((p) => p.id))
+          const availableProducts = data.flatMap((row) => {
+            const product = Array.isArray(row.products) ? row.products[0] : row.products
+            return product ? [{ ...product, required_qty: row.required_qty, sort_order: row.sort_order, qty: 0 }] : []
+          }) as ProductWithQty[]
+          setProducts(availableProducts)
+          loadExisting(availableProducts.map((p) => p.id))
+          loadRecentUsage(availableProducts.map((p) => p.id))
         }
       })
   }, [activeCat, date, storeId])
@@ -118,11 +143,11 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
     return map
   }, [recentUsage])
   const displayedProducts = useMemo(() => {
-    const normalized = search.trim().toLocaleLowerCase()
+    const normalized = normalizeSearch(search)
     return products
       .filter((product) => {
         if (!normalized) return true
-        return [product.name, product.brand ?? ''].some((value) => value.toLocaleLowerCase().includes(normalized))
+        return [product.name, product.brand ?? ''].some((value) => normalizeSearch(value).includes(normalized))
       })
       .sort((a, b) => {
         const aRank = usageRank.get(a.id)
