@@ -31,7 +31,6 @@ type InventoryMovement = {
 type UsageLog = { id: number; store_id: number; product_id: number; date: string; quantity: number; type: string }
 type Receipt = { id: number; product_id: number; date: string; quantity: number }
 type Balance = { product_id: number; year_month: string; carry_over: number }
-
 const MOVEMENT_META: Record<string, { short: string; label: string; className: string }> = {
   purchase_order: { short: '入', label: '入荷・発注', className: 'bg-emerald-50 text-emerald-700' },
   transfer_in: { short: '移', label: '店舗移動（入）', className: 'bg-purple-50 text-purple-700' },

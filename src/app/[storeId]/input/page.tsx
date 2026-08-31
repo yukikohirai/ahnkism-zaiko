@@ -141,7 +141,6 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
         openSession = refreshedSession
       }
     }
-
     setSession(openSession as InventorySession)
     setDate(openSession.entry_date)
     setCompleted(openSession.status === 'completed')
