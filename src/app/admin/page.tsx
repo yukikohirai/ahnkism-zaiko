@@ -7,18 +7,48 @@ import { supabase } from '@/lib/supabase'
 
 type Store = { id: number; name: string }
 type Category = { id: number; name: string; sort_order: number }
-type Product = { id: number; category_id: number; brand: string | null; name: string; required_qty: number; dealer: string | null }
+type Product = { id: number; category_id: number; brand: string | null; name: string; required_qty: number; dealer: string | null; manufacturer: string | null }
+type SessionSummary = { id: string; store_id: number; entry_date: string; status: 'draft' | 'completed'; completed_at: string | null }
+type StoreProductSummary = {
+  store_id: number
+  product_id: number
+  opening_stock: number
+  required_qty: number
+  sort_order: number
+  dealer_override: string | null
+  product: { id: number; category_id: number; brand: string | null; name: string; dealer: string | null; manufacturer: string | null }
+}
+type MovementSummary = { store_id: number; product_id: number; quantity: number }
+type StoreAssignment = { store_id: number; product_id: number; sort_order: number }
+type InventoryMovement = {
+  id: string
+  store_id: number
+  product_id: number
+  occurred_on: string
+  quantity: number
+  movement_type: string
+}
 type UsageLog = { id: number; store_id: number; product_id: number; date: string; quantity: number; type: string }
 type Receipt = { id: number; product_id: number; date: string; quantity: number }
 type Balance = { product_id: number; year_month: string; carry_over: number }
 
+const MOVEMENT_META: Record<string, { short: string; label: string; className: string }> = {
+  purchase_order: { short: '入', label: '入荷・発注', className: 'bg-emerald-50 text-emerald-700' },
+  transfer_in: { short: '移', label: '店舗移動（入）', className: 'bg-purple-50 text-purple-700' },
+  transfer_out: { short: '移', label: '店舗移動（出）', className: 'bg-purple-50 text-purple-700' },
+  usage: { short: '業', label: '業務利用', className: 'bg-blue-50 text-blue-700' },
+  retail_sale: { short: '販', label: '店販販売', className: 'bg-green-50 text-green-700' },
+  personal_sale: { short: '個', label: '個人販売', className: 'bg-amber-50 text-amber-700' },
+  adjustment: { short: '調', label: '在庫調整', className: 'bg-gray-100 text-gray-700' },
+}
+
+const MOVEMENT_ORDER = ['purchase_order', 'transfer_in', 'transfer_out', 'usage', 'retail_sale', 'personal_sale', 'adjustment']
 const TYPE_CYCLE: Record<string, string> = { '業務': '店販', '店販': '個人', '個人': '業務' }
 const TYPE_COLOR: Record<string, string> = {
   '業務': 'bg-blue-50 text-blue-700',
   '店販': 'bg-green-50 text-green-700',
   '個人': 'bg-amber-50 text-amber-700',
 }
-const TYPE_LABEL: Record<string, string> = { '業務': '業', '店販': '販', '個人': '個' }
 
 function getDays(year: number, month: number) {
   const n = new Date(year, month, 0).getDate()
@@ -32,6 +62,538 @@ function toYM(year: number, month: number) {
 }
 function dow(year: number, month: number, d: number) {
   return ['日','月','火','水','木','金','土'][new Date(year, month-1, d).getDay()]
+}
+
+function normalizeSearch(value: string) {
+  return value.normalize('NFKC').toLocaleLowerCase().replace(/\s+/g, '')
+}
+
+function signedQuantity(quantity: number) {
+  return quantity > 0 ? `+${quantity}` : String(quantity)
+}
+
+function supplierName(row: Pick<StoreProductSummary, 'dealer_override' | 'product'>) {
+  return row.dealer_override || row.product.dealer || row.product.manufacturer || '発注先未設定'
+}
+
+function sortBySheetGroups<T>(items: T[], getSupplier: (item: T) => string, getCategoryId: (item: T) => number, getSortOrder: (item: T) => number) {
+  const originalOrder = [...items].sort((a, b) => getSortOrder(a) - getSortOrder(b))
+  const supplierOrder = new Map<string, number>()
+  const categoryOrder = new Map<string, number>()
+  originalOrder.forEach((item, index) => {
+    const supplier = getSupplier(item)
+    const categoryKey = `${supplier}_${getCategoryId(item)}`
+    if (!supplierOrder.has(supplier)) supplierOrder.set(supplier, index)
+    if (!categoryOrder.has(categoryKey)) categoryOrder.set(categoryKey, index)
+  })
+  return originalOrder.sort((a, b) => {
+    const aSupplier = getSupplier(a)
+    const bSupplier = getSupplier(b)
+    return (supplierOrder.get(aSupplier) ?? 0) - (supplierOrder.get(bSupplier) ?? 0)
+      || (categoryOrder.get(`${aSupplier}_${getCategoryId(a)}`) ?? 0) - (categoryOrder.get(`${bSupplier}_${getCategoryId(b)}`) ?? 0)
+      || getSortOrder(a) - getSortOrder(b)
+  })
+}
+
+function MovementCell({ movements }: { movements: InventoryMovement[] }) {
+  const summaries = useMemo(() => {
+    const totals = new Map<string, number>()
+    movements.forEach((movement) => {
+      totals.set(movement.movement_type, (totals.get(movement.movement_type) ?? 0) + movement.quantity)
+    })
+    return Array.from(totals.entries())
+      .filter(([, quantity]) => quantity !== 0)
+      .sort(([a], [b]) => {
+        const aIndex = MOVEMENT_ORDER.indexOf(a)
+        const bIndex = MOVEMENT_ORDER.indexOf(b)
+        return (aIndex < 0 ? MOVEMENT_ORDER.length : aIndex) - (bIndex < 0 ? MOVEMENT_ORDER.length : bIndex)
+      })
+  }, [movements])
+
+  if (summaries.length === 0) return null
+
+  return (
+    <div className="flex min-h-7 flex-col justify-center gap-0.5 px-0.5 py-0.5">
+      {summaries.map(([type, quantity]) => {
+        const meta = MOVEMENT_META[type] ?? { short: '他', label: type, className: 'bg-gray-100 text-gray-700' }
+        return (
+          <span key={type} title={`${meta.label} ${signedQuantity(quantity)}`} className={`whitespace-nowrap rounded px-0.5 text-[9px] font-bold leading-4 ${meta.className}`}>
+            {meta.short}{signedQuantity(quantity)}
+          </span>
+        )
+      })}
+    </div>
+  )
+}
+
+function InventoryHistoryTable({ stores, products, year, month }: { stores: Store[]; products: Product[]; year: number; month: number }) {
+  const [movements, setMovements] = useState<InventoryMovement[]>([])
+  const [assignments, setAssignments] = useState<StoreAssignment[]>([])
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+  const [selectedStoreId, setSelectedStoreId] = useState<number | 'all'>('all')
+
+  const loadHistory = useCallback(async () => {
+    if (products.length === 0) {
+      setMovements([])
+      setAssignments([])
+      return
+    }
+    setLoading(true)
+    setError('')
+    const productIds = products.map((product) => product.id)
+    const from = toDate(year, month, 1)
+    const to = toDate(year, month, getDays(year, month).length)
+    const [movementResult, assignmentResult] = await Promise.all([
+      supabase.from('inventory_movements')
+        .select('id, store_id, product_id, occurred_on, quantity, movement_type')
+        .in('product_id', productIds)
+        .gte('occurred_on', from)
+        .lte('occurred_on', to)
+        .order('occurred_on')
+        .order('created_at'),
+      supabase.from('store_products').select('store_id, product_id, sort_order').in('product_id', productIds),
+    ])
+    if (movementResult.error || assignmentResult.error) {
+      setError('月別履歴を読み込めませんでした。')
+    }
+    setMovements((movementResult.data ?? []) as InventoryMovement[])
+    setAssignments((assignmentResult.data ?? []) as StoreAssignment[])
+    setLoading(false)
+  }, [month, products, year])
+
+  useEffect(() => { void loadHistory() }, [loadHistory])
+
+  const days = useMemo(() => getDays(year, month), [year, month])
+  const movementCellMap = useMemo(() => {
+    const map = new Map<string, InventoryMovement[]>()
+    movements.forEach((movement) => {
+      const key = `${movement.store_id}_${movement.product_id}_${movement.occurred_on}`
+      const rows = map.get(key) ?? []
+      rows.push(movement)
+      map.set(key, rows)
+    })
+    return map
+  }, [movements])
+  const monthlyNetMap = useMemo(() => {
+    const map = new Map<string, number>()
+    movements.forEach((movement) => {
+      const key = `${movement.store_id}_${movement.product_id}`
+      map.set(key, (map.get(key) ?? 0) + movement.quantity)
+    })
+    return map
+  }, [movements])
+  const storeIdsByProduct = useMemo(() => {
+    const map = new Map<number, Set<number>>()
+    assignments.forEach((assignment) => {
+      const storeIds = map.get(assignment.product_id) ?? new Set<number>()
+      storeIds.add(assignment.store_id)
+      map.set(assignment.product_id, storeIds)
+    })
+    movements.forEach((movement) => {
+      const storeIds = map.get(movement.product_id) ?? new Set<number>()
+      storeIds.add(movement.store_id)
+      map.set(movement.product_id, storeIds)
+    })
+    return map
+  }, [assignments, movements])
+  const visibleStores = selectedStoreId === 'all'
+    ? stores
+    : stores.filter((store) => store.id === selectedStoreId)
+  const assignmentOrderMap = useMemo(() => new Map(
+    assignments.map((assignment) => [`${assignment.store_id}_${assignment.product_id}`, assignment.sort_order])
+  ), [assignments])
+  const historyProducts = useMemo(() => {
+    if (selectedStoreId === 'all') return products
+    return [...products]
+      .filter((product) => storeIdsByProduct.get(product.id)?.has(selectedStoreId))
+      .sort((a, b) => (
+        (assignmentOrderMap.get(`${selectedStoreId}_${a.id}`) ?? Number.MAX_SAFE_INTEGER)
+        - (assignmentOrderMap.get(`${selectedStoreId}_${b.id}`) ?? Number.MAX_SAFE_INTEGER)
+      ))
+  }, [assignmentOrderMap, products, selectedStoreId, storeIdsByProduct])
+  const hasVisibleProducts = historyProducts.some((product) => (
+    visibleStores.some((store) => storeIdsByProduct.get(product.id)?.has(store.id))
+  ))
+
+  return (
+    <section>
+      <div className="mx-3 mb-2 mt-5 flex items-end justify-between gap-3">
+        <div>
+          <h2 className="font-bold text-gray-800">月別の入出庫履歴</h2>
+          <p className="text-xs text-gray-400">店舗入力・入荷・店舗移動・販売をすべて同じ表に反映</p>
+        </div>
+        <button onClick={() => void loadHistory()} className="shrink-0 rounded-lg bg-gray-100 px-3 py-1.5 text-xs text-gray-600">更新</button>
+      </div>
+      <div className="mx-3 mb-3 flex gap-1 overflow-x-auto pb-1">
+        <button onClick={() => setSelectedStoreId('all')}
+          className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-medium ${selectedStoreId === 'all' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-600'}`}>
+          全店
+        </button>
+        {stores.map((store) => (
+          <button key={store.id} onClick={() => setSelectedStoreId(store.id)}
+            className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-medium ${selectedStoreId === store.id ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-600'}`}>
+            {store.name}
+          </button>
+        ))}
+      </div>
+      {error && <p className="mx-3 mb-2 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}
+      {loading ? (
+        <p className="py-12 text-center text-sm text-gray-400">月別履歴を読み込み中...</p>
+      ) : (
+        <div className="overflow-x-auto pb-2">
+          <table className="w-max table-fixed border-collapse text-xs">
+            <thead>
+              <tr className="bg-gray-100">
+                <th className="sticky left-0 z-10 w-20 min-w-20 border border-gray-200 bg-gray-100 px-1 py-1.5 text-left">ブランド</th>
+                <th className="sticky left-20 z-10 w-40 min-w-40 border border-gray-200 bg-gray-100 px-1 py-1.5 text-left">商品名</th>
+                <th className="w-14 min-w-14 border border-gray-200 bg-gray-100 px-1 py-1.5 text-center text-[10px] text-gray-500">店舗</th>
+                {days.map((day) => {
+                  const dayOfWeek = dow(year, month, day)
+                  return (
+                    <th key={day} className={`w-14 min-w-14 border border-gray-200 px-0 py-1 text-center ${dayOfWeek === '日' ? 'bg-red-50 text-red-500' : dayOfWeek === '土' ? 'bg-blue-50 text-blue-500' : 'text-gray-500'}`}>
+                      <div>{day}</div><div className="text-[9px]">{dayOfWeek}</div>
+                    </th>
+                  )
+                })}
+                <th className="w-14 min-w-14 border border-gray-200 bg-yellow-50 px-1 py-1.5 text-center font-bold text-gray-600">月計</th>
+              </tr>
+            </thead>
+            <tbody>
+              {historyProducts.flatMap((product, productIndex) => {
+                const productStoreIds = storeIdsByProduct.get(product.id) ?? new Set<number>()
+                const productStores = visibleStores.filter((store) => productStoreIds.has(store.id))
+                const rowBackground = productIndex % 2 === 0 ? 'bg-white' : 'bg-gray-50'
+                return productStores.map((store, storeIndex) => {
+                  const monthlyNet = monthlyNetMap.get(`${store.id}_${product.id}`) ?? 0
+                  return (
+                    <tr key={`${product.id}_${store.id}`} className={rowBackground}>
+                      <td className={`sticky left-0 z-10 border border-gray-200 px-1 py-1 text-[10px] text-gray-400 ${rowBackground}`}>
+                        {storeIndex === 0 ? product.brand ?? '' : ''}
+                      </td>
+                      <td title={product.name} className={`sticky left-20 z-10 max-w-40 overflow-hidden text-ellipsis whitespace-nowrap border border-gray-200 px-1 py-1 font-medium text-gray-700 ${rowBackground}`}>
+                        {storeIndex === 0 ? product.name : ''}
+                      </td>
+                      <td className="border border-gray-200 bg-gray-50 px-1 py-1 text-center text-[10px] font-medium text-gray-500">{store.name}</td>
+                      {days.map((day) => {
+                        const date = toDate(year, month, day)
+                        const cellMovements = movementCellMap.get(`${store.id}_${product.id}_${date}`) ?? []
+                        return <td key={day} className="border border-gray-200 p-0 text-center"><MovementCell movements={cellMovements} /></td>
+                      })}
+                      <td className={`border border-gray-200 bg-yellow-50 px-1 py-1 text-center font-bold ${monthlyNet > 0 ? 'text-green-700' : monthlyNet < 0 ? 'text-red-600' : 'text-gray-300'}`}>
+                        {monthlyNet === 0 ? '−' : signedQuantity(monthlyNet)}
+                      </td>
+                    </tr>
+                  )
+                })
+              })}
+            </tbody>
+          </table>
+          {products.length > 0 && !hasVisibleProducts && (
+            <p className="py-10 text-center text-sm text-gray-400">このカテゴリの取扱商品はありません</p>
+          )}
+        </div>
+      )}
+      <div className="flex flex-wrap gap-2 px-4 pb-5 pt-3 text-[10px] text-gray-500">
+        {MOVEMENT_ORDER.map((type) => {
+          const meta = MOVEMENT_META[type]
+          return <span key={type} className={`rounded px-1.5 py-0.5 ${meta.className}`}>{meta.short} = {meta.label}</span>
+        })}
+        <span className="w-full text-gray-400">入出庫の追加は「入出庫」画面から行います。</span>
+      </div>
+    </section>
+  )
+}
+
+function HqOverview({ stores, categories }: { stores: Store[]; categories: Category[] }) {
+  const [sessions, setSessions] = useState<SessionSummary[]>([])
+  const [activeSessionIds, setActiveSessionIds] = useState<Set<string>>(new Set())
+  const [assignments, setAssignments] = useState<StoreProductSummary[]>([])
+  const [movements, setMovements] = useState<MovementSummary[]>([])
+  const [selectedView, setSelectedView] = useState<string>('retail')
+  const [search, setSearch] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [editRequiredKey, setEditRequiredKey] = useState('')
+  const [editRequiredValue, setEditRequiredValue] = useState('')
+
+  const todayText = new Date().toLocaleDateString('sv-SE')
+
+  const loadOverview = useCallback(async () => {
+    if (stores.length === 0) return
+    setLoading(true)
+    const [sessionResult, assignmentResult, usageResult] = await Promise.all([
+      supabase.from('inventory_sessions')
+        .select('id, store_id, entry_date, status, completed_at')
+        .eq('entry_date', todayText),
+      supabase.from('store_products')
+        .select('store_id, product_id, opening_stock, required_qty, sort_order, dealer_override, products!inner(id, category_id, brand, name, dealer, manufacturer)')
+        .eq('is_active', true)
+        .eq('products.is_active', true),
+      supabase.from('inventory_movements')
+        .select('store_id, product_id, quantity')
+        .order('created_at'),
+    ])
+
+    const sessionRows = (sessionResult.data ?? []) as SessionSummary[]
+    setSessions(sessionRows)
+    const sessionIds = sessionRows.map((session) => session.id)
+    if (sessionIds.length > 0) {
+      const [itemResult, confirmationResult] = await Promise.all([
+        supabase.from('inventory_session_items').select('session_id').in('session_id', sessionIds),
+        supabase.from('inventory_session_categories').select('session_id').in('session_id', sessionIds),
+      ])
+      setActiveSessionIds(new Set([
+        ...(itemResult.data ?? []).map((item) => item.session_id),
+        ...(confirmationResult.data ?? []).map((item) => item.session_id),
+      ]))
+    } else {
+      setActiveSessionIds(new Set())
+    }
+    const rows = (assignmentResult.data ?? []).flatMap((row) => {
+      const product = Array.isArray(row.products) ? row.products[0] : row.products
+      return product ? [{
+        store_id: row.store_id,
+        product_id: row.product_id,
+        opening_stock: row.opening_stock,
+        required_qty: row.required_qty,
+        sort_order: row.sort_order,
+        dealer_override: row.dealer_override,
+        product,
+      } as StoreProductSummary] : []
+    })
+    setAssignments(rows)
+    setMovements((usageResult.data ?? []) as MovementSummary[])
+    setLoading(false)
+  }, [stores, todayText])
+
+  useEffect(() => { void loadOverview() }, [loadOverview])
+
+  const movementMap = useMemo(() => {
+    const map = new Map<string, number>()
+    movements.forEach((item) => {
+      const key = `${item.store_id}_${item.product_id}`
+      map.set(key, (map.get(key) ?? 0) + item.quantity)
+    })
+    return map
+  }, [movements])
+
+  const currentStock = useCallback((row: StoreProductSummary) => (
+    row.opening_stock + (movementMap.get(`${row.store_id}_${row.product_id}`) ?? 0)
+  ), [movementMap])
+
+  async function saveStoreRequired(row: StoreProductSummary) {
+    const quantity = Math.max(0, parseInt(editRequiredValue) || 0)
+    const { error } = await supabase.from('store_products')
+      .update({ required_qty: quantity, updated_at: new Date().toISOString() })
+      .eq('store_id', row.store_id).eq('product_id', row.product_id)
+    if (!error) {
+      setAssignments((previous) => previous.map((item) => (
+        item.store_id === row.store_id && item.product_id === row.product_id
+          ? { ...item, required_qty: quantity }
+          : item
+      )))
+    }
+    setEditRequiredKey('')
+  }
+
+  const normalizedSearch = normalizeSearch(search)
+  const retailCategoryIds = useMemo(() => new Set(
+    categories.filter((category) => /店販|オージュア|aujua/i.test(category.name)).map((category) => category.id)
+  ), [categories])
+  const categoryNameMap = useMemo(() => new Map(categories.map((category) => [category.id, category.name])), [categories])
+  const selectedStoreId = selectedView === 'retail' ? null : Number(selectedView)
+  const storeRows = useMemo(() => {
+    if (selectedStoreId === null) return []
+    const filtered = assignments
+      .filter((row) => row.store_id === selectedStoreId)
+      .filter((row) => !normalizedSearch || normalizeSearch(`${supplierName(row)}${row.product.manufacturer ?? ''}${row.product.brand ?? ''}${row.product.name}`).includes(normalizedSearch))
+    return sortBySheetGroups(
+      filtered,
+      (row) => supplierName(row),
+      (row) => row.product.category_id,
+      (row) => row.sort_order,
+    )
+  }, [assignments, normalizedSearch, selectedStoreId])
+
+  const retailRows = useMemo(() => {
+    const grouped = new Map<number, { product: StoreProductSummary['product']; rows: StoreProductSummary[] }>()
+    assignments.filter((row) => retailCategoryIds.has(row.product.category_id)).forEach((row) => {
+      const current = grouped.get(row.product_id) ?? { product: row.product, rows: [] }
+      current.rows.push(row)
+      grouped.set(row.product_id, current)
+    })
+    const filtered = Array.from(grouped.values())
+      .filter((item) => !normalizedSearch || normalizeSearch(`${item.rows.map((row) => supplierName(row)).join('')}${item.product.manufacturer ?? ''}${item.product.brand ?? ''}${item.product.name}`).includes(normalizedSearch))
+    return sortBySheetGroups(
+      filtered,
+      (item) => supplierName([...item.rows].sort((a, b) => a.sort_order - b.sort_order)[0]),
+      (item) => item.product.category_id,
+      (item) => Math.min(...item.rows.map((row) => row.sort_order)),
+    )
+  }, [assignments, normalizedSearch, retailCategoryIds])
+
+  return (
+    <section className="mx-3 mt-3 space-y-3">
+      <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+        <div className="mb-3 flex items-center justify-between">
+          <div>
+            <h2 className="font-bold text-gray-800">今日の入力状況</h2>
+            <p className="text-xs text-gray-400">{todayText}</p>
+          </div>
+          <button onClick={() => void loadOverview()} className="rounded-lg bg-gray-100 px-3 py-1.5 text-xs text-gray-600">更新</button>
+        </div>
+        <div className="grid grid-cols-3 gap-2">
+          {stores.map((store) => {
+            const storeSessions = sessions.filter((session) => session.store_id === store.id)
+            const completedSession = storeSessions.find((session) => session.status === 'completed')
+            const draftSession = storeSessions.find((session) => session.status === 'draft' && activeSessionIds.has(session.id))
+            const status = completedSession ? '完了' : draftSession ? '下書き' : '未入力'
+            const style = completedSession
+              ? 'border-green-200 bg-green-50 text-green-700'
+              : draftSession
+                ? 'border-amber-200 bg-amber-50 text-amber-700'
+                : 'border-gray-200 bg-gray-50 text-gray-500'
+            return (
+              <Link key={store.id} href={`/${store.id}/input`} className={`rounded-xl border p-3 text-center ${style}`}>
+                <div className="text-sm font-bold">{store.name}</div>
+                <div className="mt-1 text-xs font-medium">{status}</div>
+              </Link>
+            )
+          })}
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-gray-200 bg-white shadow-sm">
+        <div className="border-b border-gray-100 p-4">
+          <h2 className="font-bold text-gray-800">店舗別在庫</h2>
+          <p className="mt-0.5 text-xs text-gray-400">開始在庫に使用・入荷・店舗移動を反映して表示</p>
+          <div className="mt-3 flex gap-1 overflow-x-auto pb-1">
+            <button onClick={() => setSelectedView('retail')}
+              className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-medium ${selectedView === 'retail' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-600'}`}>
+              全店 店販・Aujua
+            </button>
+            {stores.map((store) => (
+              <button key={store.id} onClick={() => setSelectedView(String(store.id))}
+                className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-medium ${selectedView === String(store.id) ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-600'}`}>
+                {store.name}
+              </button>
+            ))}
+          </div>
+          <input type="search" value={search} onChange={(event) => setSearch(event.target.value)}
+            placeholder="商品名・ブランドで検索"
+            className="mt-2 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm outline-none focus:border-blue-400" />
+        </div>
+
+        {loading ? (
+          <p className="py-10 text-center text-sm text-gray-400">読み込み中...</p>
+        ) : selectedView === 'retail' ? (
+          <div className="max-h-[460px] overflow-auto">
+            <table className="w-full min-w-[560px] text-xs">
+              <thead className="sticky top-0 bg-gray-50 text-gray-500">
+                <tr>
+                  <th className="px-3 py-2 text-left">商品</th>
+                  {stores.map((store) => <th key={store.id} className="px-2 py-2 text-center">{store.name}</th>)}
+                  <th className="px-3 py-2 text-center">全店計</th>
+                </tr>
+              </thead>
+              <tbody>
+                {retailRows.flatMap((item, index) => {
+                  const stockByStore = new Map(item.rows.map((row) => [row.store_id, currentStock(row)]))
+                  const total = Array.from(stockByStore.values()).reduce((sum, value) => sum + value, 0)
+                  const currentSupplier = supplierName([...item.rows].sort((a, b) => a.sort_order - b.sort_order)[0])
+                  const previousItem = retailRows[index - 1]
+                  const previousSupplier = previousItem ? supplierName([...previousItem.rows].sort((a, b) => a.sort_order - b.sort_order)[0]) : null
+                  const isNewSupplier = currentSupplier !== previousSupplier
+                  const isNewCategory = isNewSupplier || item.product.category_id !== previousItem?.product.category_id
+                  const rows: React.ReactNode[] = []
+                  if (isNewSupplier) {
+                    rows.push(
+                      <tr key={`${item.product.id}_supplier`} className="bg-slate-100">
+                        <td colSpan={stores.length + 2} className="px-3 py-2 text-sm font-bold text-slate-700">{currentSupplier}</td>
+                      </tr>
+                    )
+                  }
+                  if (isNewCategory) {
+                    rows.push(
+                      <tr key={`${item.product.id}_category`} className="bg-slate-50">
+                        <td colSpan={stores.length + 2} className="px-3 py-1.5 text-xs font-bold text-slate-500">{categoryNameMap.get(item.product.category_id) ?? 'カテゴリ未設定'}</td>
+                      </tr>
+                    )
+                  }
+                  rows.push(
+                    <tr key={item.product.id} className="border-t border-gray-100">
+                      <td className="px-3 py-2">
+                        <div className="text-[10px] text-gray-400">{item.product.brand}</div>
+                        <div className="font-medium text-gray-700">{item.product.name}</div>
+                      </td>
+                      {stores.map((store) => <td key={store.id} className="px-2 py-2 text-center font-medium text-gray-700">{stockByStore.get(store.id) ?? '−'}</td>)}
+                      <td className="bg-blue-50 px-3 py-2 text-center font-bold text-blue-700">{total}</td>
+                    </tr>
+                  )
+                  return rows
+                })}
+              </tbody>
+            </table>
+            {retailRows.length === 0 && <p className="py-10 text-center text-sm text-gray-400">該当商品がありません</p>}
+          </div>
+        ) : (
+          <div className="max-h-[460px] overflow-auto">
+            <table className="w-full text-xs">
+              <thead className="sticky top-0 bg-gray-50 text-gray-500">
+                <tr><th className="px-3 py-2 text-left">商品</th><th className="px-2 py-2 text-center">現在庫</th><th className="px-2 py-2 text-center">必要数</th><th className="px-3 py-2 text-center">不足</th></tr>
+              </thead>
+              <tbody>
+                {storeRows.flatMap((row, index) => {
+                  const stock = currentStock(row)
+                  const shortage = Math.max(0, row.required_qty - stock)
+                  const editKey = `${row.store_id}_${row.product_id}`
+                  const currentSupplier = supplierName(row)
+                  const previousRow = storeRows[index - 1]
+                  const previousSupplier = previousRow ? supplierName(previousRow) : null
+                  const isNewSupplier = currentSupplier !== previousSupplier
+                  const isNewCategory = isNewSupplier || row.product.category_id !== previousRow?.product.category_id
+                  const rows: React.ReactNode[] = []
+                  if (isNewSupplier) {
+                    rows.push(
+                      <tr key={`${editKey}_supplier`} className="bg-slate-100">
+                        <td colSpan={4} className="px-3 py-2 text-sm font-bold text-slate-700">{currentSupplier}</td>
+                      </tr>
+                    )
+                  }
+                  if (isNewCategory) {
+                    rows.push(
+                      <tr key={`${editKey}_category`} className="bg-slate-50">
+                        <td colSpan={4} className="px-3 py-1.5 text-xs font-bold text-slate-500">{categoryNameMap.get(row.product.category_id) ?? 'カテゴリ未設定'}</td>
+                      </tr>
+                    )
+                  }
+                  rows.push(
+                    <tr key={editKey} className="border-t border-gray-100">
+                      <td className="px-3 py-2"><div className="text-[10px] text-gray-400">{row.product.brand}</div><div className="font-medium text-gray-700">{row.product.name}</div></td>
+                      <td className={`px-2 py-2 text-center font-bold ${stock < row.required_qty ? 'text-red-600' : 'text-gray-700'}`}>{stock}</td>
+                      <td className="px-2 py-2 text-center">
+                        {editRequiredKey === editKey ? (
+                          <input type="number" min="0" value={editRequiredValue} onChange={(event) => setEditRequiredValue(event.target.value)}
+                            onBlur={() => void saveStoreRequired(row)} onKeyDown={(event) => event.key === 'Enter' && void saveStoreRequired(row)}
+                            className="w-14 rounded border border-blue-300 px-1 py-1 text-center outline-none" autoFocus />
+                        ) : (
+                          <button onClick={() => { setEditRequiredKey(editKey); setEditRequiredValue(String(row.required_qty)) }}
+                            className="rounded bg-purple-50 px-3 py-1 font-bold text-purple-700">{row.required_qty}</button>
+                        )}
+                      </td>
+                      <td className={`px-3 py-2 text-center font-bold ${shortage > 0 ? 'text-orange-600' : 'text-gray-300'}`}>{shortage > 0 ? shortage : '−'}</td>
+                    </tr>
+                  )
+                  return rows
+                })}
+              </tbody>
+            </table>
+            {storeRows.length === 0 && <p className="py-10 text-center text-sm text-gray-400">該当商品がありません</p>}
+          </div>
+        )}
+      </div>
+    </section>
+  )
 }
 
 export default function AdminPage() {
@@ -51,8 +613,6 @@ export default function AdminPage() {
   const [closeDone, setCloseDone] = useState(false)
   const [editCell, setEditCell] = useState<string | null>(null)
   const [editVal, setEditVal] = useState('')
-  const [editReqId, setEditReqId] = useState<number | null>(null)
-  const [editReqVal, setEditReqVal] = useState('')
 
   useEffect(() => {
     void authorize()
@@ -148,14 +708,6 @@ export default function AdminPage() {
     loadData()
   }
 
-  // 必要数の編集
-  async function saveRequiredQty(productId: number) {
-    const qty = parseInt(editReqVal) || 0
-    await supabase.from('products').update({ required_qty: qty }).eq('id', productId)
-    setProducts(prev => prev.map(p => p.id === productId ? { ...p, required_qty: qty } : p))
-    setEditReqId(null)
-  }
-
   // 使用ログの種類変更
   async function cycleType(log: UsageLog) {
     const nextType = TYPE_CYCLE[log.type] || '業務'
@@ -201,17 +753,19 @@ export default function AdminPage() {
         <div className="px-3 py-2 flex items-center gap-2 flex-wrap">
           <h1 className="text-base font-bold text-gray-800 shrink-0">管理</h1>
           <Link href="/" className="text-xs text-blue-500 shrink-0">← 入力</Link>
+          <Link href="/admin/operations" className="rounded bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 shrink-0">入出庫</Link>
+          <Link href="/admin/products" className="rounded bg-purple-50 px-2 py-1 text-xs font-medium text-purple-700 shrink-0">商品管理</Link>
           <div className="flex items-center gap-1">
             <button onClick={prevMonth} className="px-2 py-1 rounded border border-gray-200 text-sm">‹</button>
             <span className="text-sm font-medium px-1">{year}年{month}月</span>
             <button onClick={nextMonth} className="px-2 py-1 rounded border border-gray-200 text-sm">›</button>
           </div>
           <button
-            onClick={handleClose}
-            disabled={closing}
-            className="px-2 py-1 bg-orange-500 text-white rounded text-xs font-medium hover:bg-orange-600 disabled:opacity-50"
+            disabled
+            title="9月の運用開始までに月締め機能を反映します"
+            className="px-2 py-1 bg-gray-200 text-gray-500 rounded text-xs font-medium"
           >
-            {closing ? '処理中...' : closeDone ? '✓ 月締め完了' : '月締め'}
+            月締め（9月開始）
           </button>
           <div className="ml-auto flex gap-1 text-xs">
             <span className="px-1.5 py-0.5 rounded bg-blue-100 text-blue-700">業務</span>
@@ -230,8 +784,16 @@ export default function AdminPage() {
         </div>
       </div>
 
+      <HqOverview stores={stores} categories={categories} />
+
+      <InventoryHistoryTable stores={stores} products={products} year={year} month={month} />
+
       {/* テーブル */}
-      <div className="overflow-x-auto" style={{ paddingRight: '80vw' }}>
+      <div className="hidden">
+        <h2 className="font-bold text-gray-800">月別使用履歴</h2>
+        <p className="text-xs text-gray-400">商品ごとの入庫・店舗使用数を日別に確認</p>
+      </div>
+      <div className="hidden">
         <table className="text-xs border-collapse" style={{ tableLayout: 'fixed', width: 'max-content' }}>
           <thead>
             <tr className="bg-gray-100">
@@ -276,24 +838,7 @@ export default function AdminPage() {
                         {carryOver > 0 ? carryOver : ''}
                       </td>
                       <td className="border border-gray-200 text-center p-0 bg-purple-50">
-                        {editReqId === p.id ? (
-                          <input
-                            type="number"
-                            value={editReqVal}
-                            onChange={e => setEditReqVal(e.target.value)}
-                            onBlur={() => saveRequiredQty(p.id)}
-                            onKeyDown={e => e.key === 'Enter' && saveRequiredQty(p.id)}
-                            className="w-full text-center text-xs py-1 outline-none bg-purple-100"
-                            autoFocus
-                          />
-                        ) : (
-                          <button
-                            onClick={() => { setEditReqId(p.id); setEditReqVal(String(p.required_qty)) }}
-                            className={`w-full py-1 px-0 text-center text-xs ${p.required_qty > 0 ? 'text-purple-700 font-bold' : 'text-gray-300 hover:bg-purple-50'}`}
-                          >
-                            {p.required_qty > 0 ? p.required_qty : '−'}
-                          </button>
-                        )}
+                        <span className="text-[9px] text-purple-500">店舗別</span>
                       </td>
                       <td className="border border-gray-200 px-1 py-1 text-center bg-gray-100 text-[10px] text-gray-400">入庫</td>
                       {days.map(d => {
@@ -314,8 +859,9 @@ export default function AdminPage() {
                               />
                             ) : (
                               <button
-                                onClick={() => handleReceiptEdit(p.id, d)}
-                                className={`w-full h-full py-1 px-0 text-center ${rec && rec.quantity > 0 ? 'bg-green-100 text-green-700 font-bold' : 'hover:bg-green-50 text-gray-300'}`}
+                                disabled
+                                title="店舗別の入荷入力画面へ切り替え中です"
+                                className={`w-full h-full py-1 px-0 text-center ${rec && rec.quantity > 0 ? 'bg-green-100 text-green-700 font-bold' : 'text-gray-200'}`}
                               >
                                 {rec && rec.quantity > 0 ? rec.quantity : ''}
                               </button>
@@ -396,13 +942,10 @@ export default function AdminPage() {
       </div>
 
       {/* 凡例 */}
-      <div className="px-4 pt-3 pb-1 text-xs text-gray-400 flex gap-4">
-        <span>🟩 入庫（タップで編集）</span>
+      <div className="hidden">
+        <span>入庫・月締めは店舗別の新画面へ切り替え中です</span>
         <span>数字タップで種類切替：<span className="text-blue-600">業務</span>→<span className="text-green-600">店販</span>→<span className="text-amber-600">個人</span></span>
       </div>
-
-      {/* 発注リスト */}
-      <OrderList products={products} balances={balances} receipts={receipts} logs={logs} ym={ym} />
     </div>
   )
 }

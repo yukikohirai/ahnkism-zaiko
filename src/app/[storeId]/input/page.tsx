@@ -6,6 +6,7 @@ import { supabase, type Store, type Category, type Product } from '@/lib/supabas
 
 type ProductWithQty = Product & { qty: number }
 type RecentUsage = { product_id: number; date: string; quantity: number }
+type InventorySession = { id: string; store_id: number; entry_date: string; status: 'draft' | 'completed' }
 
 function today() {
   return new Date().toLocaleDateString('sv-SE')
@@ -23,11 +24,18 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
   const [categories, setCategories] = useState<Category[]>([])
   const [activeCat, setActiveCat] = useState<number | null>(null)
   const [products, setProducts] = useState<ProductWithQty[]>([])
+  const [productCatalog, setProductCatalog] = useState<Product[]>([])
+  const [session, setSession] = useState<InventorySession | null>(null)
+  const [draftLoaded, setDraftLoaded] = useState(false)
+  const [draftQuantities, setDraftQuantities] = useState<Map<number, number>>(new Map())
+  const [confirmedCategories, setConfirmedCategories] = useState<Set<number>>(new Set())
   const [recentUsage, setRecentUsage] = useState<RecentUsage[]>([])
   const [search, setSearch] = useState('')
   const [date, setDate] = useState(today())
   const [saving, setSaving] = useState(false)
-  const [done, setDone] = useState(false)
+  const [pendingWrites, setPendingWrites] = useState(0)
+  const [completed, setCompleted] = useState(false)
+  const [saveError, setSaveError] = useState('')
   const [showConfirm, setShowConfirm] = useState(false)
 
   useEffect(() => {
@@ -49,33 +57,107 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
 
   useEffect(() => {
     if (!profile) return
-    supabase.from('stores').select('*').eq('id', storeId).single().then(({ data }) => {
-      if (data) setStore(data)
-    })
-    Promise.all([
+    void loadStoreAndDraft()
+  }, [storeId, profile])
+
+  async function loadStoreAndDraft() {
+    setDraftLoaded(false)
+    const [storeResult, categoryResult, assignmentResult] = await Promise.all([
+      supabase.from('stores').select('*').eq('id', storeId).single(),
       supabase.from('categories').select('*').order('sort_order'),
       supabase
         .from('store_products')
-        .select('products!inner(category_id)')
+        .select('products!inner(id, category_id, brand, name, required_qty, sort_order)')
         .eq('store_id', Number(storeId))
         .eq('is_active', true)
         .eq('products.is_active', true),
-    ]).then(([categoryResult, assignmentResult]) => {
-      if (!categoryResult.data) return
-      const assignedCategoryIds = new Set(
-        (assignmentResult.data ?? []).flatMap((row) => {
-          const product = Array.isArray(row.products) ? row.products[0] : row.products
-          return product ? [product.category_id] : []
-        })
-      )
-      const availableCategories = categoryResult.data.filter((category) => assignedCategoryIds.has(category.id))
-      setCategories(availableCategories)
-      setActiveCat(availableCategories[0]?.id ?? null)
+    ])
+    if (storeResult.data) setStore(storeResult.data)
+
+    const catalog = (assignmentResult.data ?? []).flatMap((row) => {
+      const product = Array.isArray(row.products) ? row.products[0] : row.products
+      return product ? [product as Product] : []
     })
-  }, [storeId, profile])
+    setProductCatalog(catalog)
+    const assignedCategoryIds = new Set(catalog.map((product) => product.category_id))
+    const availableCategories = (categoryResult.data ?? []).filter((category) => assignedCategoryIds.has(category.id))
+    setCategories(availableCategories)
+    setActiveCat(availableCategories[0]?.id ?? null)
+
+    let { data: openSession } = await supabase
+      .from('inventory_sessions')
+      .select('*')
+      .eq('store_id', Number(storeId))
+      .eq('status', 'draft')
+      .maybeSingle()
+
+    if (!openSession) {
+      const completedToday = await supabase
+        .from('inventory_sessions')
+        .select('*')
+        .eq('store_id', Number(storeId))
+        .eq('entry_date', today())
+        .eq('status', 'completed')
+        .maybeSingle()
+      openSession = completedToday.data
+    }
+
+    if (!openSession) {
+      const inserted = await supabase
+        .from('inventory_sessions')
+        .insert({ store_id: Number(storeId), entry_date: today(), status: 'draft' })
+        .select('*')
+        .single()
+      openSession = inserted.data
+      if (!openSession) {
+        const retry = await supabase
+          .from('inventory_sessions')
+          .select('*')
+          .eq('store_id', Number(storeId))
+          .eq('status', 'draft')
+          .maybeSingle()
+        openSession = retry.data
+      }
+    }
+    if (!openSession) {
+      setSaveError('下書きを開始できませんでした。画面を再読み込みしてください。')
+      return
+    }
+
+    // 入力は数日分をまとめて行うため、未完了の内容は残しつつ
+    // 翌日以降に再開した下書きの日付だけを当日に繰り越す。
+    const currentDate = today()
+    if (openSession.status === 'draft' && openSession.entry_date !== currentDate) {
+      const { data: refreshedSession, error: dateRefreshError } = await supabase
+        .from('inventory_sessions')
+        .update({ entry_date: currentDate, updated_at: new Date().toISOString() })
+        .eq('id', openSession.id)
+        .select('*')
+        .single()
+
+      if (dateRefreshError) {
+        setSaveError('入力日を今日の日付に更新できませんでした。')
+      } else if (refreshedSession) {
+        openSession = refreshedSession
+      }
+    }
+
+    setSession(openSession as InventorySession)
+    setDate(openSession.entry_date)
+    setCompleted(openSession.status === 'completed')
+    const [itemResult, confirmationResult] = await Promise.all([
+      supabase.from('inventory_session_items').select('product_id, quantity').eq('session_id', openSession.id),
+      supabase.from('inventory_session_categories').select('category_id').eq('session_id', openSession.id),
+    ])
+    const quantities = new Map<number, number>()
+    ;(itemResult.data ?? []).forEach((item) => quantities.set(item.product_id, item.quantity))
+    setDraftQuantities(quantities)
+    setConfirmedCategories(new Set((confirmationResult.data ?? []).map((item) => item.category_id)))
+    setDraftLoaded(true)
+  }
 
   useEffect(() => {
-    if (!activeCat || !profile) return
+    if (!activeCat || !profile || !session || !draftLoaded) return
     supabase
       .from('store_products')
       .select('required_qty, sort_order, products!inner(*)')
@@ -88,35 +170,22 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
         if (data) {
           const availableProducts = data.flatMap((row) => {
             const product = Array.isArray(row.products) ? row.products[0] : row.products
-            return product ? [{ ...product, required_qty: row.required_qty, sort_order: row.sort_order, qty: 0 }] : []
+            return product ? [{
+              ...product,
+              required_qty: row.required_qty,
+              sort_order: row.sort_order,
+              qty: draftQuantities.get(product.id) ?? 0,
+            }] : []
           }) as ProductWithQty[]
           setProducts(availableProducts)
-          loadExisting(availableProducts.map((p) => p.id))
           loadRecentUsage(availableProducts.map((p) => p.id))
         }
       })
-  }, [activeCat, date, storeId, profile])
+  }, [activeCat, storeId, profile, session, draftLoaded])
 
   async function handleLogout() {
     await supabase.auth.signOut()
     router.replace('/')
-  }
-
-  async function loadExisting(productIds: number[]) {
-    const { data } = await supabase
-      .from('usage_logs')
-      .select('product_id, quantity')
-      .eq('store_id', storeId)
-      .eq('date', date)
-      .in('product_id', productIds)
-    if (data) {
-      setProducts((prev) =>
-        prev.map((p) => {
-          const found = data.find((d) => d.product_id === p.id)
-          return found ? { ...p, qty: found.quantity } : p
-        })
-      )
-    }
   }
 
   async function loadRecentUsage(productIds: number[]) {
@@ -133,29 +202,85 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
     if (data) setRecentUsage(data)
   }
 
-  function adjust(id: number, delta: number) {
-    setProducts((prev) =>
-      prev.map((p) => p.id === id ? { ...p, qty: Math.max(0, p.qty + delta) } : p)
-    )
-  }
-
-  async function handleSubmit() {
-    setSaving(true)
-    const rows = products.map((p) => ({
-      store_id: Number(storeId),
-      product_id: p.id,
-      date,
-      quantity: p.qty,
+  async function adjust(id: number, delta: number) {
+    if (!session || completed) return
+    const current = draftQuantities.get(id) ?? 0
+    const next = Math.max(0, current + delta)
+    setDraftQuantities((previous) => new Map(previous).set(id, next))
+    setProducts((previous) => previous.map((product) => product.id === id ? { ...product, qty: next } : product))
+    setSaveError('')
+    setPendingWrites((count) => count + 1)
+    const itemResult = await supabase.from('inventory_session_items').upsert({
+      session_id: session.id,
+      product_id: id,
+      quantity: next,
       updated_at: new Date().toISOString(),
-    }))
-    await supabase.from('usage_logs').upsert(rows, { onConflict: 'store_id,product_id,date' })
-    setSaving(false)
-    setShowConfirm(false)
-    setDone(true)
-    setTimeout(() => setDone(false), 2000)
+    }, { onConflict: 'session_id,product_id' })
+    let confirmationError = null
+    if (activeCat && confirmedCategories.has(activeCat)) {
+      setConfirmedCategories((previous) => {
+        const nextSet = new Set(previous)
+        nextSet.delete(activeCat)
+        return nextSet
+      })
+      const confirmationResult = await supabase.from('inventory_session_categories').delete()
+        .eq('session_id', session.id).eq('category_id', activeCat)
+      confirmationError = confirmationResult.error
+    }
+    setPendingWrites((count) => Math.max(0, count - 1))
+    if (itemResult.error || confirmationError) {
+      setSaveError('下書きの保存に失敗しました。通信状態を確認してください。')
+    }
   }
 
-  const hasInput = products.some((p) => p.qty > 0)
+  async function handleDateChange(nextDate: string) {
+    setDate(nextDate)
+    if (!session || completed) return
+    const { error } = await supabase.from('inventory_sessions')
+      .update({ entry_date: nextDate, updated_at: new Date().toISOString() }).eq('id', session.id)
+    if (error) setSaveError('入力日の保存に失敗しました。')
+  }
+
+  async function confirmCurrentCategory() {
+    if (!session || !activeCat || completed || pendingWrites > 0) return
+    setSaving(true)
+    const { error } = await supabase.from('inventory_session_categories').upsert({
+      session_id: session.id,
+      category_id: activeCat,
+      confirmed_at: new Date().toISOString(),
+    }, { onConflict: 'session_id,category_id' })
+    setSaving(false)
+    if (error) {
+      setSaveError('カテゴリの確認状態を保存できませんでした。')
+      return
+    }
+    setConfirmedCategories((previous) => new Set(previous).add(activeCat))
+    const currentIndex = categories.findIndex((category) => category.id === activeCat)
+    const followingCategories = [
+      ...categories.slice(currentIndex + 1),
+      ...categories.slice(0, currentIndex),
+    ]
+    const nextCategory = followingCategories.find((category) => !confirmedCategories.has(category.id))
+    if (nextCategory) setActiveCat(nextCategory.id)
+  }
+
+  async function handleComplete() {
+    if (!session || !allCategoriesConfirmed || pendingWrites > 0) return
+    setSaving(true)
+    const { error } = await supabase.rpc('complete_inventory_session', { p_session_id: session.id })
+    setSaving(false)
+    if (error) {
+      setSaveError(error.message || '入力を完了できませんでした。')
+      return
+    }
+    setShowConfirm(false)
+    setCompleted(true)
+  }
+
+  const allCategoriesConfirmed = categories.length > 0 && categories.every((category) => confirmedCategories.has(category.id))
+  const confirmedCategoryCount = categories.filter((category) => confirmedCategories.has(category.id)).length
+  const summaryProducts = productCatalog.filter((product) => (draftQuantities.get(product.id) ?? 0) > 0)
+  const hasInput = summaryProducts.length > 0
   const usageRank = useMemo(() => {
     const map = new Map<number, { count: number; lastDate: string }>()
     recentUsage.forEach((usage) => {
@@ -188,7 +313,7 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
   if (!store) return <div className="flex items-center justify-center min-h-screen text-gray-400">読み込み中...</div>
 
   return (
-    <div className="max-w-lg mx-auto pb-32">
+    <div className="max-w-lg mx-auto pb-64">
       {/* ヘッダー */}
       <div className="sticky top-0 z-10 bg-white shadow-sm">
         <div className="flex items-center justify-between px-4 py-3">
@@ -202,7 +327,8 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
             <input
               type="date"
               value={date}
-              onChange={(e) => setDate(e.target.value)}
+              onChange={(e) => void handleDateChange(e.target.value)}
+              disabled={completed}
               className="text-xs text-blue-600 text-center border-none outline-none bg-transparent"
             />
           </div>
@@ -220,24 +346,29 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
                   : 'bg-gray-100 text-gray-600'
               }`}
             >
-              {cat.name}
+              {confirmedCategories.has(cat.id) ? '✓ ' : ''}{cat.name}
             </button>
           ))}
         </div>
-      </div>
-
-      {/* 商品リスト */}
-      <div className="px-4 pt-3">
-        <label className="block mb-3">
+        <label className="block px-3 pb-3">
           <span className="sr-only">商品を検索</span>
           <input
             type="search"
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="商品名・ブランドで検索"
-            className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-3 text-sm outline-none focus:border-blue-400 focus:bg-white"
+            className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm outline-none focus:border-blue-400 focus:bg-white"
           />
         </label>
+      </div>
+
+      {/* 商品リスト */}
+      <div className="px-4 pt-3">
+        {completed && (
+          <div className="mb-3 rounded-xl bg-green-50 px-4 py-3 text-center text-sm font-medium text-green-700">
+            この入力は完了済みです。店舗からは修正できません。
+          </div>
+        )}
         {recentUsage.length > 0 && !search && (
           <p className="mb-2 text-xs font-medium text-blue-600">最近入力した商品を上に表示しています</p>
         )}
@@ -255,8 +386,9 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
             </div>
             <div className="flex items-center gap-2 shrink-0">
               <button
-                onClick={() => adjust(product.id, -1)}
-                className="w-10 h-10 rounded-full bg-gray-100 text-xl text-gray-600 flex items-center justify-center active:bg-gray-200"
+                onClick={() => void adjust(product.id, -1)}
+                disabled={completed}
+                className="w-10 h-10 rounded-full bg-gray-100 text-xl text-gray-600 flex items-center justify-center active:bg-gray-200 disabled:opacity-40"
               >
                 −
               </button>
@@ -264,29 +396,50 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
                 {product.qty}
               </span>
               <button
-                onClick={() => adjust(product.id, 1)}
-                className="w-10 h-10 rounded-full bg-blue-500 text-white text-xl flex items-center justify-center active:bg-blue-600"
+                onClick={() => void adjust(product.id, 1)}
+                disabled={completed}
+                className="w-10 h-10 rounded-full bg-blue-500 text-white text-xl flex items-center justify-center active:bg-blue-600 disabled:opacity-40"
               >
                 ＋
               </button>
             </div>
           </div>
         ))}
+        {saveError && <p className="mt-3 text-center text-sm text-red-500">{saveError}</p>}
       </div>
 
-      {/* 送信ボタン */}
-      <div className="fixed bottom-0 left-0 right-0 p-4 bg-white border-t border-gray-200 max-w-lg mx-auto">
-        {done ? (
+      {/* 完了ボタン */}
+      <div className="fixed bottom-0 left-0 right-0 z-20 border-t border-gray-200 bg-white p-4 shadow-[0_-4px_12px_rgba(0,0,0,0.06)] max-w-lg mx-auto">
+        {completed ? (
           <div className="w-full py-4 rounded-2xl bg-green-500 text-white text-center font-bold text-lg">
-            ✓ 送信しました
+            ✓ 入力を完了しました
           </div>
         ) : (
-          <button
-            onClick={() => setShowConfirm(true)}
-            className="w-full py-4 rounded-2xl bg-blue-500 text-white text-lg font-bold active:bg-blue-600 disabled:opacity-40"
-          >
-            送信する
-          </button>
+          <div>
+            {activeCat && (
+              <button
+                onClick={() => void confirmCurrentCategory()}
+                disabled={saving || pendingWrites > 0 || confirmedCategories.has(activeCat)}
+                className={`mb-3 w-full rounded-xl border-2 py-3 text-sm font-bold ${
+                  confirmedCategories.has(activeCat)
+                    ? 'border-green-200 bg-green-50 text-green-700'
+                    : 'border-blue-200 bg-blue-50 text-blue-700'
+                } disabled:opacity-70`}
+              >
+                {confirmedCategories.has(activeCat) ? '✓ このカテゴリは確認済み' : 'このカテゴリを確認済みにする'}
+              </button>
+            )}
+            <p className="mb-2 text-center text-xs text-gray-500">
+              {confirmedCategoryCount} / {categories.length} カテゴリ確認済み
+            </p>
+            <button
+              onClick={() => setShowConfirm(true)}
+              disabled={!allCategoriesConfirmed || saving || pendingWrites > 0}
+              className="w-full py-4 rounded-2xl bg-blue-500 text-white text-lg font-bold active:bg-blue-600 disabled:bg-gray-200 disabled:text-gray-400"
+            >
+              {allCategoriesConfirmed ? '入力を完了する' : '全カテゴリを確認してください'}
+            </button>
+          </div>
         )}
       </div>
 
@@ -294,14 +447,14 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
       {showConfirm && (
         <div className="fixed inset-0 z-50 flex items-end justify-center bg-black/40">
           <div className="w-full max-w-lg bg-white rounded-t-3xl p-6">
-            <h2 className="text-lg font-bold text-gray-800 mb-1">送信確認</h2>
-            <p className="text-gray-500 text-sm mb-4">{date} の使用数を送信します。</p>
+            <h2 className="text-lg font-bold text-gray-800 mb-1">入力完了の確認</h2>
+            <p className="text-gray-500 text-sm mb-4">{date} の入力を完了します。完了後は店舗から修正できません。</p>
             {hasInput ? (
               <div className="mb-4 max-h-48 overflow-y-auto">
-                {products.filter((p) => p.qty > 0).map((p) => (
+                {summaryProducts.map((p) => (
                   <div key={p.id} className="flex justify-between text-sm py-1 border-b border-gray-100">
                     <span className="text-gray-700">{p.name}</span>
-                    <span className="font-bold text-blue-600">{p.qty}</span>
+                    <span className="font-bold text-blue-600">{draftQuantities.get(p.id) ?? 0}</span>
                   </div>
                 ))}
               </div>
@@ -316,11 +469,11 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
                 キャンセル
               </button>
               <button
-                onClick={handleSubmit}
+                onClick={() => void handleComplete()}
                 disabled={saving}
                 className="flex-1 py-3 rounded-xl bg-blue-500 text-white font-bold disabled:opacity-50"
               >
-                {saving ? '送信中...' : '送信する'}
+                {saving ? '完了処理中...' : '完了する'}
               </button>
             </div>
           </div>
