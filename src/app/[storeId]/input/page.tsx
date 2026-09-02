@@ -381,7 +381,7 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
           <div key={product.id} className="flex items-center justify-between py-3 border-b border-gray-100">
             <div className="flex-1 min-w-0 mr-3">
               {product.brand && <div className="text-xs text-gray-400">{product.brand}</div>}
-              <div className="text-base text-gray-800 font-medium truncate">{product.name}</div>
+              <div className="text-base text-gray-800 font-medium leading-snug break-words">{product.name}</div>
             </div>
             <div className="flex items-center gap-2 shrink-0">
               <button
@@ -452,8 +452,8 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
               <div className="mb-4 max-h-48 overflow-y-auto">
                 {summaryProducts.map((p) => (
                   <div key={p.id} className="flex justify-between text-sm py-1 border-b border-gray-100">
-                    <span className="text-gray-700">{p.name}</span>
-                    <span className="font-bold text-blue-600">{draftQuantities.get(p.id) ?? 0}</span>
+                    <span className="mr-3 min-w-0 flex-1 break-words text-gray-700">{p.name}</span>
+                    <span className="shrink-0 font-bold text-blue-600">{draftQuantities.get(p.id) ?? 0}</span>
                   </div>
                 ))}
               </div>
