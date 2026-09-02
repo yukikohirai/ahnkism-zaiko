@@ -47,6 +47,9 @@ export default function ProductManagementPage() {
   const [editManufacturer, setEditManufacturer] = useState('')
   const [editBrand, setEditBrand] = useState('')
   const [editName, setEditName] = useState('')
+  const [editCategoryId, setEditCategoryId] = useState<number | null>(null)
+  const [editNewCategory, setEditNewCategory] = useState('')
+  const [newCategory, setNewCategory] = useState('')
   const [sortStoreId, setSortStoreId] = useState<number | null>(null)
   const [sortCategoryId, setSortCategoryId] = useState<number | null>(null)
   const [sortRows, setSortRows] = useState<SortRow[]>([])
@@ -95,6 +98,10 @@ export default function ProductManagementPage() {
       .filter((product) => !normalized || normalizeSearch(`${product.dealer ?? ''}${product.manufacturer ?? ''}${product.brand ?? ''}${product.name}`).includes(normalized))
   }, [products, search, showStopped])
 
+  const dealerOptions = useMemo(() => uniqueValues(products.map((product) => product.dealer)), [products])
+  const manufacturerOptions = useMemo(() => uniqueValues(products.map((product) => product.manufacturer)), [products])
+  const brandOptions = useMemo(() => uniqueValues(products.map((product) => product.brand)), [products])
+
   function toggleStore(storeId: number) {
     setSelectedStores((previous) => {
       const next = new Set(previous)
@@ -117,9 +124,14 @@ export default function ProductManagementPage() {
     setSaving(true)
     setError('')
     setMessage('')
+    const resolvedCategoryId = await resolveCategoryId(categoryId, newCategory)
+    if (!resolvedCategoryId) {
+      setSaving(false)
+      return
+    }
     const maxSort = products.length > 0 ? Math.max(...products.map((product) => product.id)) + 1 : 1
     const { data: created, error: productError } = await supabase.from('products').insert({
-      category_id: categoryId,
+      category_id: resolvedCategoryId,
       dealer: dealer.trim() || null,
       manufacturer: manufacturer.trim() || null,
       brand: brand.trim() || null,
@@ -154,10 +166,30 @@ export default function ProductManagementPage() {
     setManufacturer('')
     setBrand('')
     setName('')
+    setNewCategory('')
     setShowForm(false)
     setMessage('商品を追加しました。必要数は店舗別在庫画面で設定できます。')
     setSaving(false)
     await loadData()
+  }
+
+  async function resolveCategoryId(selectedId: number | null, newName: string): Promise<number | null> {
+    const trimmed = newName.trim()
+    if (!trimmed) return selectedId
+    const existing = categories.find((category) => normalizeSearch(category.name) === normalizeSearch(trimmed))
+    if (existing) return existing.id
+    const maxSort = categories.length > 0 ? categories.length + 1 : 1
+    const { data, error: categoryError } = await supabase
+      .from('categories')
+      .insert({ name: trimmed, sort_order: maxSort })
+      .select('id, name')
+      .single()
+    if (categoryError || !data) {
+      setError(categoryError?.message ?? 'カテゴリを追加できませんでした。')
+      return null
+    }
+    setCategories((previous) => [...previous, data as Category])
+    return data.id
   }
 
   function startEdit(product: Product) {
@@ -166,6 +198,8 @@ export default function ProductManagementPage() {
     setEditManufacturer(product.manufacturer ?? '')
     setEditBrand(product.brand ?? '')
     setEditName(product.name)
+    setEditCategoryId(product.category_id)
+    setEditNewCategory('')
     setError('')
     setMessage('')
   }
@@ -183,11 +217,18 @@ export default function ProductManagementPage() {
     }
     setSaving(true)
     setError('')
+    const resolvedCategoryId = await resolveCategoryId(editCategoryId, editNewCategory)
+    if (!resolvedCategoryId) {
+      setSaving(false)
+      if (!error) setError('カテゴリを確認してください。')
+      return
+    }
     const patch = {
       dealer: editDealer.trim() || null,
       manufacturer: editManufacturer.trim() || null,
       brand: editBrand.trim() || null,
       name: trimmedName,
+      category_id: resolvedCategoryId,
     }
     const { error: updateError } = await supabase.from('products').update(patch).eq('id', product.id)
     setSaving(false)
@@ -197,7 +238,10 @@ export default function ProductManagementPage() {
     }
     setProducts((previous) => previous.map((item) => item.id === product.id ? { ...item, ...patch } : item))
     setEditingId(null)
-    setMessage('商品情報を更新しました。在庫・必要数・履歴はそのままです。')
+    setEditNewCategory('')
+    setMessage(resolvedCategoryId !== product.category_id
+      ? 'カテゴリを変更しました。店舗の入力画面では別のタブに移動します。'
+      : '商品情報を更新しました。在庫・必要数・履歴はそのままです。')
   }
 
   const loadSortRows = useCallback(async () => {
@@ -298,16 +342,14 @@ export default function ProductManagementPage() {
           <section className="mb-4 rounded-2xl border border-blue-100 bg-white p-4 shadow-sm">
             <h2 className="mb-3 font-bold text-gray-800">商品を追加</h2>
             <div className="grid gap-3 sm:grid-cols-2">
-              <TextField label="ディーラー" value={dealer} onChange={setDealer} placeholder="例：きくや" />
-              <TextField label="メーカー" value={manufacturer} onChange={setManufacturer} placeholder="例：ミルボン" />
-              <TextField label="ブランド" value={brand} onChange={setBrand} placeholder="例：Aujua" />
+              <PickField label="発注先" value={dealer} onChange={setDealer} options={dealerOptions} placeholder="例：きくや" />
+              <PickField label="メーカー" value={manufacturer} onChange={setManufacturer} options={manufacturerOptions} placeholder="例：ミルボン" />
+              <PickField label="ブランド" value={brand} onChange={setBrand} options={brandOptions} placeholder="例：Aujua" />
               <TextField label="商品名（必須）" value={name} onChange={setName} placeholder="容量・色番まで入力" />
             </div>
-            <label className="mt-3 block text-xs font-medium text-gray-500">カテゴリ
-              <select value={categoryId ?? ''} onChange={(event) => setCategoryId(Number(event.target.value))} className="mt-1 block w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm">
-                {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
-              </select>
-            </label>
+            <div className="mt-3">
+              <CategoryField label="カテゴリ" categories={categories} selectedId={categoryId} onSelect={setCategoryId} newName={newCategory} onNewName={setNewCategory} />
+            </div>
             <fieldset className="mt-3"><legend className="text-xs font-medium text-gray-500">取扱店舗</legend>
               <div className="mt-1 grid grid-cols-3 gap-2">
                 {stores.map((store) => (
@@ -372,10 +414,14 @@ export default function ProductManagementPage() {
               <div key={product.id} className="px-4 py-3">
                 {editingId === product.id ? (
                   <div className="space-y-2">
-                    <TextField label="発注先" value={editDealer} onChange={setEditDealer} placeholder="きくや など" />
-                    <TextField label="メーカー" value={editManufacturer} onChange={setEditManufacturer} placeholder="メーカー名" />
-                    <TextField label="ブランド" value={editBrand} onChange={setEditBrand} placeholder="ブランド名" />
+                    <PickField key={`dealer-${product.id}`} label="発注先" value={editDealer} onChange={setEditDealer} options={dealerOptions} placeholder="きくや など" />
+                    <PickField key={`maker-${product.id}`} label="メーカー" value={editManufacturer} onChange={setEditManufacturer} options={manufacturerOptions} placeholder="メーカー名" />
+                    <PickField key={`brand-${product.id}`} label="ブランド" value={editBrand} onChange={setEditBrand} options={brandOptions} placeholder="ブランド名" />
                     <TextField label="商品名" value={editName} onChange={setEditName} placeholder="商品名" />
+                    <CategoryField key={`cat-${product.id}`} label="カテゴリ" categories={categories} selectedId={editCategoryId} onSelect={setEditCategoryId} newName={editNewCategory} onNewName={setEditNewCategory} />
+                    {editCategoryId !== product.category_id && (
+                      <p className="text-[11px] text-amber-600">カテゴリを変えると、店舗の入力画面では別のタブに移動します。</p>
+                    )}
                     <div className="flex gap-2 pt-1">
                       <button onClick={() => setEditingId(null)} className="flex-1 rounded-xl border border-gray-200 py-2.5 text-sm text-gray-600">やめる</button>
                       <button onClick={() => void saveEdit(product)} disabled={saving} className="flex-1 rounded-xl bg-blue-500 py-2.5 text-sm font-bold text-white disabled:opacity-50">{saving ? '保存中...' : '保存'}</button>
@@ -401,6 +447,78 @@ export default function ProductManagementPage() {
         </section>
       </div>
     </main>
+  )
+}
+
+function uniqueValues(values: (string | null)[]) {
+  const seen = new Map<string, string>()
+  for (const value of values) {
+    const trimmed = (value ?? '').trim()
+    if (!trimmed) continue
+    const key = normalizeSearch(trimmed)
+    if (!seen.has(key)) seen.set(key, trimmed)
+  }
+  return [...seen.values()].sort((a, b) => a.localeCompare(b, 'ja'))
+}
+
+function PickField({ label, value, onChange, options, placeholder }: { label: string; value: string; onChange: (value: string) => void; options: string[]; placeholder: string }) {
+  const [creating, setCreating] = useState(() => value.trim() !== '' && !options.includes(value.trim()))
+  const clash = creating ? options.find((option) => normalizeSearch(option) === normalizeSearch(value) && option !== value.trim()) : undefined
+
+  if (creating) {
+    return (
+      <label className="block text-xs font-medium text-gray-500">{label}
+        <input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} autoFocus className="mt-1 block w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm outline-none focus:border-blue-400" />
+        {clash && <span className="mt-1 block text-[11px] font-normal text-amber-600">「{clash}」とほぼ同じです。表記ゆれになるので、一覧から選び直すことをおすすめします。</span>}
+        <button type="button" onClick={() => { setCreating(false); onChange('') }} className="mt-1 text-[11px] font-normal text-blue-600 underline">一覧から選ぶ</button>
+      </label>
+    )
+  }
+
+  return (
+    <label className="block text-xs font-medium text-gray-500">{label}
+      <select
+        value={options.includes(value.trim()) ? value.trim() : ''}
+        onChange={(event) => {
+          if (event.target.value === '__new__') { setCreating(true); onChange('') }
+          else onChange(event.target.value)
+        }}
+        className="mt-1 block w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm"
+      >
+        <option value="">（未設定）</option>
+        {options.map((option) => <option key={option} value={option}>{option}</option>)}
+        <option value="__new__">＋ 新しく作る</option>
+      </select>
+    </label>
+  )
+}
+
+function CategoryField({ label, categories, selectedId, onSelect, newName, onNewName }: { label: string; categories: Category[]; selectedId: number | null; onSelect: (id: number | null) => void; newName: string; onNewName: (value: string) => void }) {
+  const creating = newName !== '' || selectedId === null
+  const clash = newName.trim() ? categories.find((category) => normalizeSearch(category.name) === normalizeSearch(newName)) : undefined
+
+  return (
+    <label className="block text-xs font-medium text-gray-500">{label}
+      <select
+        value={creating ? '__new__' : String(selectedId)}
+        onChange={(event) => {
+          if (event.target.value === '__new__') { onSelect(null); onNewName(' ') }
+          else { onNewName(''); onSelect(Number(event.target.value)) }
+        }}
+        className="mt-1 block w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm"
+      >
+        {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+        <option value="__new__">＋ 新しく作る</option>
+      </select>
+      {creating && (
+        <>
+          <input value={newName.trimStart()} onChange={(event) => onNewName(event.target.value)} placeholder="新しいカテゴリ名" autoFocus className="mt-2 block w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm outline-none focus:border-blue-400" />
+          {clash
+            ? <span className="mt-1 block text-[11px] font-normal text-amber-600">「{clash.name}」がすでにあります。保存するとそちらにまとめられます。</span>
+            : <span className="mt-1 block text-[11px] font-normal text-gray-400">新しいカテゴリは一番後ろに追加されます。</span>}
+        </>
+      )}
+    </label>
   )
 }
 
