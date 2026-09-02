@@ -18,6 +18,8 @@ type Product = {
   is_active: boolean
 }
 
+type SortRow = { product_id: number; sort_order: number; name: string; brand: string | null }
+
 function normalizeSearch(value: string) {
   return value.normalize('NFKC').toLocaleLowerCase().replace(/\s+/g, '')
 }
@@ -40,6 +42,16 @@ export default function ProductManagementPage() {
   const [saving, setSaving] = useState(false)
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
+  const [editingId, setEditingId] = useState<number | null>(null)
+  const [editDealer, setEditDealer] = useState('')
+  const [editManufacturer, setEditManufacturer] = useState('')
+  const [editBrand, setEditBrand] = useState('')
+  const [editName, setEditName] = useState('')
+  const [sortStoreId, setSortStoreId] = useState<number | null>(null)
+  const [sortCategoryId, setSortCategoryId] = useState<number | null>(null)
+  const [sortRows, setSortRows] = useState<SortRow[]>([])
+  const [sortLoading, setSortLoading] = useState(false)
+  const [sortDirty, setSortDirty] = useState(false)
 
   useEffect(() => { void authorize() }, [])
 
@@ -69,6 +81,8 @@ export default function ProductManagementPage() {
     setCategories(nextCategories)
     setProducts((productResult.data ?? []) as Product[])
     setCategoryId((current) => current ?? nextCategories[0]?.id ?? null)
+    setSortStoreId((current) => current ?? nextStores[0]?.id ?? null)
+    setSortCategoryId((current) => current ?? nextCategories[0]?.id ?? null)
     setSelectedStores((current) => current.size > 0 ? current : new Set(nextStores.map((store) => store.id)))
   }, [authorized])
 
@@ -146,6 +160,110 @@ export default function ProductManagementPage() {
     await loadData()
   }
 
+  function startEdit(product: Product) {
+    setEditingId(product.id)
+    setEditDealer(product.dealer ?? '')
+    setEditManufacturer(product.manufacturer ?? '')
+    setEditBrand(product.brand ?? '')
+    setEditName(product.name)
+    setError('')
+    setMessage('')
+  }
+
+  async function saveEdit(product: Product) {
+    const trimmedName = editName.trim()
+    if (!trimmedName) {
+      setError('商品名を入力してください。')
+      return
+    }
+    const duplicateKey = normalizeSearch(`${editBrand.trim()}${trimmedName}`)
+    if (products.some((item) => item.id !== product.id && normalizeSearch(`${item.brand ?? ''}${item.name}`) === duplicateKey)) {
+      setError('同じブランド・商品名の商品がすでにあります。')
+      return
+    }
+    setSaving(true)
+    setError('')
+    const patch = {
+      dealer: editDealer.trim() || null,
+      manufacturer: editManufacturer.trim() || null,
+      brand: editBrand.trim() || null,
+      name: trimmedName,
+    }
+    const { error: updateError } = await supabase.from('products').update(patch).eq('id', product.id)
+    setSaving(false)
+    if (updateError) {
+      setError(updateError.message)
+      return
+    }
+    setProducts((previous) => previous.map((item) => item.id === product.id ? { ...item, ...patch } : item))
+    setEditingId(null)
+    setMessage('商品情報を更新しました。在庫・必要数・履歴はそのままです。')
+  }
+
+  const loadSortRows = useCallback(async () => {
+    if (!sortStoreId || !sortCategoryId) {
+      setSortRows([])
+      return
+    }
+    setSortLoading(true)
+    setSortDirty(false)
+    const { data } = await supabase
+      .from('store_products')
+      .select('product_id, sort_order, products!inner(name, brand, is_active, category_id)')
+      .eq('store_id', sortStoreId)
+      .eq('is_active', true)
+      .eq('products.category_id', sortCategoryId)
+      .eq('products.is_active', true)
+      .order('sort_order')
+    const rows = (data ?? []).flatMap((row) => {
+      const product = Array.isArray(row.products) ? row.products[0] : row.products
+      return product ? [{ product_id: row.product_id, sort_order: row.sort_order, name: product.name as string, brand: (product.brand ?? null) as string | null }] : []
+    })
+    setSortRows(rows)
+    setSortLoading(false)
+  }, [sortStoreId, sortCategoryId])
+
+  useEffect(() => { void loadSortRows() }, [loadSortRows])
+
+  function moveRow(index: number, direction: -1 | 1) {
+    const target = index + direction
+    if (target < 0 || target >= sortRows.length) return
+    setSortRows((previous) => {
+      const next = [...previous]
+      const [moved] = next.splice(index, 1)
+      next.splice(target, 0, moved)
+      return next
+    })
+    setSortDirty(true)
+  }
+
+  async function saveOrder() {
+    if (!sortStoreId || sortRows.length === 0) return
+    setSaving(true)
+    setError('')
+    // 元々使われていた並び番号を、新しい順番に振り直す（他カテゴリと衝突しない）
+    const slots = sortRows.map((row) => row.sort_order).sort((a, b) => a - b)
+    const updates = sortRows
+      .map((row, index) => ({ row, slot: slots[index] }))
+      .filter(({ row, slot }) => row.sort_order !== slot)
+    for (const { row, slot } of updates) {
+      const { error: updateError } = await supabase
+        .from('store_products')
+        .update({ sort_order: slot })
+        .eq('store_id', sortStoreId)
+        .eq('product_id', row.product_id)
+      if (updateError) {
+        setError(updateError.message)
+        setSaving(false)
+        return
+      }
+    }
+    setSaving(false)
+    setSortDirty(false)
+    setMessage(`並び順を保存しました。（${updates.length}件を変更）`)
+    await loadSortRows()
+  }
+
   async function setActive(product: Product, active: boolean) {
     const action = active ? '再開' : '停止'
     if (!confirm(`${product.brand ? `${product.brand} ` : ''}${product.name}を${action}しますか？\n過去の履歴は残ります。`)) return
@@ -204,6 +322,43 @@ export default function ProductManagementPage() {
           </section>
         )}
 
+        <section className="mb-4 rounded-2xl border border-gray-200 bg-white shadow-sm">
+          <div className="border-b border-gray-100 p-4">
+            <h2 className="font-bold text-gray-800">並び替え</h2>
+            <p className="mt-0.5 text-xs text-gray-400">店舗の入力画面に出てくる順番を変えます。店舗ごと・カテゴリごとに設定します。</p>
+            <div className="mt-3 flex gap-2">
+              <select value={sortStoreId ?? ''} onChange={(event) => setSortStoreId(Number(event.target.value))} className="flex-1 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm">
+                {stores.map((store) => <option key={store.id} value={store.id}>{store.name}</option>)}
+              </select>
+              <select value={sortCategoryId ?? ''} onChange={(event) => setSortCategoryId(Number(event.target.value))} className="flex-1 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm">
+                {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
+              </select>
+            </div>
+            {sortDirty && (
+              <button onClick={() => void saveOrder()} disabled={saving} className="mt-3 w-full rounded-xl bg-blue-500 py-3 text-sm font-bold text-white disabled:opacity-50">
+                {saving ? '保存中...' : 'この並び順を保存する'}
+              </button>
+            )}
+          </div>
+          <div className="max-h-[400px] divide-y divide-gray-100 overflow-y-auto">
+            {sortLoading && <p className="py-8 text-center text-sm text-gray-400">読み込み中...</p>}
+            {!sortLoading && sortRows.length === 0 && <p className="py-8 text-center text-sm text-gray-400">この店舗・カテゴリの商品がありません</p>}
+            {!sortLoading && sortRows.map((row, index) => (
+              <div key={row.product_id} className="flex items-center gap-3 px-4 py-2.5">
+                <span className="w-6 shrink-0 text-xs text-gray-300">{index + 1}</span>
+                <div className="min-w-0 flex-1">
+                  {row.brand && <div className="text-xs text-gray-400">{row.brand}</div>}
+                  <div className="text-sm leading-snug break-words text-gray-800">{row.name}</div>
+                </div>
+                <div className="flex shrink-0 gap-1">
+                  <button onClick={() => moveRow(index, -1)} disabled={index === 0} className="h-9 w-9 rounded-lg bg-gray-100 text-gray-600 disabled:opacity-30">↑</button>
+                  <button onClick={() => moveRow(index, 1)} disabled={index === sortRows.length - 1} className="h-9 w-9 rounded-lg bg-gray-100 text-gray-600 disabled:opacity-30">↓</button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </section>
+
         <section className="rounded-2xl border border-gray-200 bg-white shadow-sm">
           <div className="border-b border-gray-100 p-4">
             <div className="flex items-center justify-between gap-3">
@@ -214,13 +369,31 @@ export default function ProductManagementPage() {
           </div>
           <div className="max-h-[600px] divide-y divide-gray-100 overflow-y-auto">
             {filteredProducts.map((product) => (
-              <div key={product.id} className="flex items-center justify-between gap-3 px-4 py-3">
-                <div className="min-w-0">
-                  <div className="text-[10px] text-gray-400">{product.dealer || 'ディーラー未設定'}／{product.manufacturer || 'メーカー未設定'}</div>
-                  <div className="text-xs text-gray-500">{product.brand}</div>
-                  <div className="truncate font-medium text-gray-800">{product.name}</div>
-                </div>
-                <button onClick={() => void setActive(product, !product.is_active)} className={`shrink-0 rounded-lg px-3 py-2 text-xs font-medium ${product.is_active ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-700'}`}>{product.is_active ? '停止' : '再開'}</button>
+              <div key={product.id} className="px-4 py-3">
+                {editingId === product.id ? (
+                  <div className="space-y-2">
+                    <TextField label="発注先" value={editDealer} onChange={setEditDealer} placeholder="きくや など" />
+                    <TextField label="メーカー" value={editManufacturer} onChange={setEditManufacturer} placeholder="メーカー名" />
+                    <TextField label="ブランド" value={editBrand} onChange={setEditBrand} placeholder="ブランド名" />
+                    <TextField label="商品名" value={editName} onChange={setEditName} placeholder="商品名" />
+                    <div className="flex gap-2 pt-1">
+                      <button onClick={() => setEditingId(null)} className="flex-1 rounded-xl border border-gray-200 py-2.5 text-sm text-gray-600">やめる</button>
+                      <button onClick={() => void saveEdit(product)} disabled={saving} className="flex-1 rounded-xl bg-blue-500 py-2.5 text-sm font-bold text-white disabled:opacity-50">{saving ? '保存中...' : '保存'}</button>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="flex items-center justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      <div className="text-[10px] text-gray-400">{product.dealer || 'ディーラー未設定'}／{product.manufacturer || 'メーカー未設定'}</div>
+                      <div className="text-xs text-gray-500">{product.brand}</div>
+                      <div className="font-medium leading-snug break-words text-gray-800">{product.name}</div>
+                    </div>
+                    <div className="flex shrink-0 flex-col gap-1.5">
+                      <button onClick={() => startEdit(product)} className="rounded-lg bg-blue-50 px-3 py-2 text-xs font-medium text-blue-700">編集</button>
+                      <button onClick={() => void setActive(product, !product.is_active)} className={`rounded-lg px-3 py-2 text-xs font-medium ${product.is_active ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-700'}`}>{product.is_active ? '停止' : '再開'}</button>
+                    </div>
+                  </div>
+                )}
               </div>
             ))}
             {filteredProducts.length === 0 && <p className="py-10 text-center text-sm text-gray-400">該当商品がありません</p>}
