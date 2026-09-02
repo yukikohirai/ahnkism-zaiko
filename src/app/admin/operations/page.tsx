@@ -197,10 +197,10 @@ export default function OperationsPage() {
     await loadData()
   }
 
-  if (!authorized) return <div className="flex min-h-screen items-center justify-center text-gray-400">権限を確認しています...</div>
+  if (!authorized) return <div className="flex min-h-[100dvh] items-center justify-center text-gray-400">権限を確認しています...</div>
 
   return (
-    <main className="min-h-screen bg-gray-50 pb-16">
+    <main className="min-h-[100dvh] bg-gray-50 pb-16">
       <header className="sticky top-0 z-20 border-b bg-white px-4 py-3 shadow-sm">
         <div className="mx-auto flex max-w-3xl items-center justify-between">
           <div><h1 className="font-bold text-gray-800">在庫の入出庫</h1><p className="text-xs text-gray-400">本部専用</p></div>

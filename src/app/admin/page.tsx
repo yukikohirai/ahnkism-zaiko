@@ -742,11 +742,11 @@ export default function AdminPage() {
   const ym = toYM(year, month)
 
   if (!authorized) {
-    return <div className="flex min-h-screen items-center justify-center text-gray-400">権限を確認しています...</div>
+    return <div className="flex min-h-[100dvh] items-center justify-center text-gray-400">権限を確認しています...</div>
   }
 
   return (
-    <div className="min-h-screen bg-gray-50">
+    <div className="min-h-[100dvh] bg-gray-50">
       {/* ヘッダー */}
       <div className="bg-white border-b sticky top-0 z-20 shadow-sm">
         <div className="px-3 py-2 flex items-center gap-2 flex-wrap">

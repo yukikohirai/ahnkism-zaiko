@@ -309,7 +309,7 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
       })
   }, [products, search, usageRank])
 
-  if (!store) return <div className="flex items-center justify-center min-h-screen text-gray-400">読み込み中...</div>
+  if (!store) return <div className="flex items-center justify-center min-h-[100dvh] text-gray-400">読み込み中...</div>
 
   return (
     <div className="max-w-lg mx-auto pb-64">
@@ -408,7 +408,7 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
       </div>
 
       {/* 完了ボタン */}
-      <div className="fixed bottom-0 left-0 right-0 z-20 border-t border-gray-200 bg-white p-4 shadow-[0_-4px_12px_rgba(0,0,0,0.06)] max-w-lg mx-auto">
+      <div className="fixed bottom-0 left-0 right-0 z-20 border-t border-gray-200 bg-white p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-[0_-4px_12px_rgba(0,0,0,0.06)] max-w-lg mx-auto">
         {completed ? (
           <div className="w-full py-4 rounded-2xl bg-green-500 text-white text-center font-bold text-lg">
             ✓ 入力を完了しました

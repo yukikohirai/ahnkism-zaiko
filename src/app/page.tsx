@@ -78,12 +78,12 @@ export default function Home() {
   }
 
   if (loading) {
-    return <main className="flex min-h-screen items-center justify-center text-gray-400">ログインを確認しています...</main>
+    return <main className="flex min-h-[100dvh] items-center justify-center text-gray-400">ログインを確認しています...</main>
   }
 
   if (!profile) {
     return (
-      <main className="flex min-h-screen flex-col items-center justify-center p-6">
+      <main className="flex min-h-[100dvh] flex-col items-center justify-center p-6">
         <div className="w-full max-w-sm">
           <h1 className="mb-2 text-center text-2xl font-bold text-gray-800">アンキシム 在庫管理</h1>
           <p className="mb-8 text-center text-sm text-gray-500">店舗または本部のアカウントでログイン</p>
@@ -121,7 +121,7 @@ export default function Home() {
   }
 
   return (
-    <main className="flex min-h-screen flex-col items-center justify-center p-6">
+    <main className="flex min-h-[100dvh] flex-col items-center justify-center p-6">
       <div className="w-full max-w-sm">
         <h1 className="mb-2 text-center text-2xl font-bold text-gray-800">アンキシム 在庫管理</h1>
         <p className="mb-8 text-center text-sm text-gray-500">本部：確認する店舗を選択</p>
