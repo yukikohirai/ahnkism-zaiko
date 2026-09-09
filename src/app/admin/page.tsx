@@ -15,7 +15,6 @@ type StoreProductSummary = {
   opening_stock: number
   required_qty: number
   sort_order: number
-  dealer_override: string | null
   product: { id: number; category_id: number; brand: string | null; name: string; dealer: string | null; manufacturer: string | null }
 }
 type MovementSummary = { store_id: number; product_id: number; quantity: number }
@@ -72,8 +71,8 @@ function signedQuantity(quantity: number) {
   return quantity > 0 ? `+${quantity}` : String(quantity)
 }
 
-function supplierName(row: Pick<StoreProductSummary, 'dealer_override' | 'product'>) {
-  return row.dealer_override || row.product.dealer || row.product.manufacturer || '発注先未設定'
+function supplierName(row: Pick<StoreProductSummary, 'product'>) {
+  return row.product.dealer || row.product.manufacturer || '発注先未設定'
 }
 
 function sortBySheetGroups<T>(items: T[], getSupplier: (item: T) => string, getCategoryId: (item: T) => number, getSortOrder: (item: T) => number) {
@@ -343,7 +342,7 @@ function HqOverview({ stores, categories }: { stores: Store[]; categories: Categ
         .select('id, store_id, entry_date, status, completed_at')
         .eq('entry_date', todayText),
       supabase.from('store_products')
-        .select('store_id, product_id, opening_stock, required_qty, sort_order, dealer_override, products!inner(id, category_id, brand, name, dealer, manufacturer)')
+        .select('store_id, product_id, opening_stock, required_qty, sort_order, products!inner(id, category_id, brand, name, dealer, manufacturer)')
         .eq('is_active', true)
         .eq('products.is_active', true),
       supabase.from('inventory_movements')
@@ -375,7 +374,6 @@ function HqOverview({ stores, categories }: { stores: Store[]; categories: Categ
         opening_stock: row.opening_stock,
         required_qty: row.required_qty,
         sort_order: row.sort_order,
-        dealer_override: row.dealer_override,
         product,
       } as StoreProductSummary] : []
     })

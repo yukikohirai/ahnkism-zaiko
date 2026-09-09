@@ -55,6 +55,9 @@ export default function ProductManagementPage() {
   const [sortRows, setSortRows] = useState<SortRow[]>([])
   const [sortLoading, setSortLoading] = useState(false)
   const [sortDirty, setSortDirty] = useState(false)
+  // key = `${store_id}_${product_id}`。値は is_active、キーが無ければ store_products の行そのものが無い。
+  const [storeAssignments, setStoreAssignments] = useState<Map<string, boolean>>(new Map())
+  const [togglingKey, setTogglingKey] = useState('')
 
   useEffect(() => { void authorize() }, [])
 
@@ -73,16 +76,18 @@ export default function ProductManagementPage() {
 
   const loadData = useCallback(async () => {
     if (!authorized) return
-    const [storeResult, categoryResult, productResult] = await Promise.all([
+    const [storeResult, categoryResult, productResult, assignmentResult] = await Promise.all([
       supabase.from('stores').select('id, name').order('sort_order'),
       supabase.from('categories').select('id, name').order('sort_order'),
       supabase.from('products').select('id, category_id, dealer, manufacturer, brand, name, is_active').order('sort_order'),
+      supabase.from('store_products').select('store_id, product_id, is_active').limit(5000),
     ])
     const nextStores = (storeResult.data ?? []) as Store[]
     const nextCategories = (categoryResult.data ?? []) as Category[]
     setStores(nextStores)
     setCategories(nextCategories)
     setProducts((productResult.data ?? []) as Product[])
+    setStoreAssignments(new Map((assignmentResult.data ?? []).map((row) => [`${row.store_id}_${row.product_id}`, row.is_active as boolean])))
     setCategoryId((current) => current ?? nextCategories[0]?.id ?? null)
     setSortStoreId((current) => current ?? nextStores[0]?.id ?? null)
     setSortCategoryId((current) => current ?? nextCategories[0]?.id ?? null)
@@ -308,6 +313,58 @@ export default function ProductManagementPage() {
     await loadSortRows()
   }
 
+  async function toggleStoreAssignment(product: Product, store: Store) {
+    const key = `${store.id}_${product.id}`
+    const exists = storeAssignments.has(key)
+    const isHandled = storeAssignments.get(key) === true
+    const nextActive = !isHandled
+    if (!nextActive) {
+      const remaining = stores.filter((item) => item.id !== store.id && storeAssignments.get(`${item.id}_${product.id}`) === true)
+      const question = remaining.length === 0
+        ? `${product.name}を${store.name}で取扱いなしにすると、どの店舗でも扱わない商品になります。よろしいですか？\n在庫・履歴は残ります。`
+        : `${product.name}を${store.name}で取扱いなしにしますか？\n在庫・履歴は残ります。`
+      if (!confirm(question)) return
+    }
+    setTogglingKey(key)
+    setError('')
+    setMessage('')
+    if (exists) {
+      const { error: updateError } = await supabase.from('store_products')
+        .update({ is_active: nextActive, updated_at: new Date().toISOString() })
+        .eq('store_id', store.id).eq('product_id', product.id)
+      if (updateError) {
+        setError(updateError.message)
+        setTogglingKey('')
+        return
+      }
+    } else {
+      const { data: lastRow } = await supabase.from('store_products')
+        .select('sort_order, products!inner(category_id)')
+        .eq('store_id', store.id)
+        .eq('products.category_id', product.category_id)
+        .order('sort_order', { ascending: false })
+        .limit(1)
+        .maybeSingle()
+      const nextSortOrder = (lastRow?.sort_order ?? 0) + 1
+      const { error: insertError } = await supabase.from('store_products').insert({
+        store_id: store.id,
+        product_id: product.id,
+        is_active: true,
+        required_qty: 0,
+        opening_stock: 0,
+        sort_order: nextSortOrder,
+      })
+      if (insertError) {
+        setError(insertError.message)
+        setTogglingKey('')
+        return
+      }
+    }
+    setStoreAssignments((previous) => new Map(previous).set(key, nextActive))
+    setTogglingKey('')
+    setMessage(`${product.name}を${store.name}で${nextActive ? '取扱いあり' : '取扱いなし'}にしました。`)
+  }
+
   async function setActive(product: Product, active: boolean) {
     const action = active ? '再開' : '停止'
     if (!confirm(`${product.brand ? `${product.brand} ` : ''}${product.name}を${action}しますか？\n過去の履歴は残ります。`)) return
@@ -359,7 +416,8 @@ export default function ProductManagementPage() {
                 ))}
               </div>
             </fieldset>
-            <p className="mt-3 text-xs text-gray-400">追加時の開始在庫・必要数は0です。追加後、店舗別在庫画面で必要数を設定してください。</p>
+            <p className="mt-3 text-xs text-gray-400">他店舗で取扱中の商品をこの店舗にも置きたい場合は、一覧の店舗チップをタップしてください。</p>
+            <p className="mt-1 text-xs text-gray-400">追加時の開始在庫・必要数は0です。追加後、店舗別在庫画面で必要数を設定してください。</p>
             <button onClick={() => void addProduct()} disabled={saving} className="mt-4 w-full rounded-xl bg-blue-500 py-3 font-bold text-white disabled:opacity-50">{saving ? '追加中...' : '商品を追加'}</button>
           </section>
         )}
@@ -428,15 +486,29 @@ export default function ProductManagementPage() {
                     </div>
                   </div>
                 ) : (
-                  <div className="flex items-center justify-between gap-3">
-                    <div className="min-w-0 flex-1">
-                      <div className="text-[10px] text-gray-400">{product.dealer || 'ディーラー未設定'}／{product.manufacturer || 'メーカー未設定'}</div>
-                      <div className="text-xs text-gray-500">{product.brand}</div>
-                      <div className="font-medium leading-snug break-words text-gray-800">{product.name}</div>
+                  <div>
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[10px] text-gray-400">{product.dealer || 'ディーラー未設定'}／{product.manufacturer || 'メーカー未設定'}</div>
+                        <div className="text-xs text-gray-500">{product.brand}</div>
+                        <div className="font-medium leading-snug break-words text-gray-800">{product.name}</div>
+                      </div>
+                      <div className="flex shrink-0 flex-col gap-1.5">
+                        <button onClick={() => startEdit(product)} className="rounded-lg bg-blue-50 px-3 py-2 text-xs font-medium text-blue-700">編集</button>
+                        <button onClick={() => void setActive(product, !product.is_active)} className={`rounded-lg px-3 py-2 text-xs font-medium ${product.is_active ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-700'}`}>{product.is_active ? '停止' : '再開'}</button>
+                      </div>
                     </div>
-                    <div className="flex shrink-0 flex-col gap-1.5">
-                      <button onClick={() => startEdit(product)} className="rounded-lg bg-blue-50 px-3 py-2 text-xs font-medium text-blue-700">編集</button>
-                      <button onClick={() => void setActive(product, !product.is_active)} className={`rounded-lg px-3 py-2 text-xs font-medium ${product.is_active ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-700'}`}>{product.is_active ? '停止' : '再開'}</button>
+                    <div className="mt-2 flex flex-wrap gap-1.5">
+                      {stores.map((store) => {
+                        const key = `${store.id}_${product.id}`
+                        const handled = storeAssignments.get(key) === true
+                        return (
+                          <button key={store.id} onClick={() => void toggleStoreAssignment(product, store)} disabled={togglingKey === key}
+                            className={`rounded-full px-3 py-1 text-xs font-medium disabled:opacity-50 ${handled ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-400'}`}>
+                            {store.name}
+                          </button>
+                        )
+                      })}
                     </div>
                   </div>
                 )}

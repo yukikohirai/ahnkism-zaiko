@@ -12,6 +12,7 @@ type Category = { id: number; name: string }
 type AssignedProduct = {
   store_id: number
   product_id: number
+  sort_order: number
   product: { id: number; category_id: number; brand: string | null; name: string }
 }
 type StockRow = { store_id: number; product_id: number; current_stock: number }
@@ -88,8 +89,8 @@ export default function OperationsPage() {
       supabase.from('stores').select('id, name').order('sort_order'),
       supabase.from('categories').select('id, name').order('sort_order'),
       supabase.from('store_products')
-        .select('store_id, product_id, products!inner(id, category_id, brand, name)')
-        .eq('is_active', true).eq('products.is_active', true),
+        .select('store_id, product_id, sort_order, products!inner(id, category_id, brand, name)')
+        .eq('is_active', true).eq('products.is_active', true).limit(5000),
       supabase.from('current_store_stock').select('store_id, product_id, current_stock'),
       supabase.from('inventory_movements')
         .select('id, store_id, product_id, occurred_on, quantity, movement_type, created_at, stores(name), products(brand, name)')
@@ -100,7 +101,7 @@ export default function OperationsPage() {
     setCategories((categoryResult.data ?? []) as Category[])
     setAssignments((assignmentResult.data ?? []).flatMap((row) => {
       const product = Array.isArray(row.products) ? row.products[0] : row.products
-      return product ? [{ store_id: row.store_id, product_id: row.product_id, product } as AssignedProduct] : []
+      return product ? [{ store_id: row.store_id, product_id: row.product_id, sort_order: row.sort_order, product } as AssignedProduct] : []
     }))
     setStockRows((stockResult.data ?? []) as StockRow[])
     setRecent((movementResult.data ?? []).map((row) => ({
@@ -125,25 +126,36 @@ export default function OperationsPage() {
   useEffect(() => { setProductId(null); setSearch(''); setMessage(''); setError(''); setActualStock('') }, [mode, storeId, fromStoreId, toStoreId])
 
   const stockMap = useMemo(() => new Map(stockRows.map((row) => [`${row.store_id}_${row.product_id}`, row.current_stock])), [stockRows])
-  const retailCategoryIds = useMemo(() => new Set(
-    categories.filter((category) => /店販|オージュア|aujua/i.test(category.name)).map((category) => category.id)
-  ), [categories])
-
-  const availableProducts = useMemo(() => {
+  // 店舗入力画面と同じ並び（カテゴリの sort_order → 店舗ごとの store_products.sort_order）で全件出す。
+  const productGroups = useMemo(() => {
     const targetStoreId = mode === 'transfer' ? fromStoreId : storeId
     if (!targetStoreId) return []
     const destinationProductIds = mode === 'transfer' && toStoreId
       ? new Set(assignments.filter((item) => item.store_id === toStoreId).map((item) => item.product_id))
       : null
     const normalized = normalizeSearch(search)
-    return assignments
+    const grouped = new Map<number, AssignedProduct[]>()
+    assignments
       .filter((item) => item.store_id === targetStoreId)
       .filter((item) => !destinationProductIds || destinationProductIds.has(item.product_id))
-      .filter((item) => mode !== 'reduction' || retailCategoryIds.has(item.product.category_id))
       .filter((item) => !normalized || normalizeSearch(`${item.product.brand ?? ''}${item.product.name}`).includes(normalized))
-      .sort((a, b) => (a.product.brand ?? '').localeCompare(b.product.brand ?? '', 'ja') || a.product.name.localeCompare(b.product.name, 'ja'))
-      .slice(0, 80)
-  }, [assignments, fromStoreId, mode, retailCategoryIds, search, storeId, toStoreId])
+      .forEach((item) => {
+        const list = grouped.get(item.product.category_id) ?? []
+        list.push(item)
+        grouped.set(item.product.category_id, list)
+      })
+    return categories
+      .filter((category) => grouped.has(category.id))
+      .map((category) => ({
+        category,
+        items: (grouped.get(category.id) ?? []).sort((a, b) => a.sort_order - b.sort_order),
+      }))
+  }, [assignments, categories, fromStoreId, mode, search, storeId, toStoreId])
+
+  const availableCount = useMemo(
+    () => productGroups.reduce((total, group) => total + group.items.length, 0),
+    [productGroups],
+  )
 
   const selectedProduct = assignments.find((item) => item.store_id === (mode === 'transfer' ? fromStoreId : storeId) && item.product_id === productId)
   const selectedStock = selectedProduct
@@ -270,18 +282,23 @@ export default function OperationsPage() {
           <label className="mt-4 block text-xs font-medium text-gray-500">商品検索
             <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="商品名・ブランドで検索" className="mt-1 block w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm outline-none focus:border-blue-400" />
           </label>
-          <div className="mt-2 max-h-64 overflow-y-auto rounded-xl border border-gray-100">
-            {availableProducts.map((item) => {
-              const itemStock = stockMap.get(`${item.store_id}_${item.product_id}`) ?? 0
-              return (
-                <button key={`${item.store_id}_${item.product_id}`} onClick={() => selectProduct(item)}
-                  className={`flex w-full items-center justify-between border-b border-gray-100 px-3 py-2 text-left last:border-0 ${productId === item.product_id ? 'bg-blue-50' : 'bg-white'}`}>
-                  <span><span className="block text-[10px] text-gray-400">{item.product.brand}</span><span className="text-sm font-medium text-gray-700">{item.product.name}</span></span>
-                  <span className={`ml-3 shrink-0 text-xs ${itemStock < 0 ? 'font-bold text-red-600' : 'text-gray-500'}`}>在庫 {itemStock}</span>
-                </button>
-              )
-            })}
-            {availableProducts.length === 0 && <p className="px-3 py-8 text-center text-sm text-gray-400">該当商品がありません</p>}
+          <div className="mt-2 max-h-[60dvh] overflow-y-auto rounded-xl border border-gray-100">
+            {productGroups.map((group) => (
+              <div key={group.category.id}>
+                <div className="border-b border-gray-100 bg-slate-50 px-3 py-1.5 text-xs font-bold text-gray-600">{group.category.name}</div>
+                {group.items.map((item) => {
+                  const itemStock = stockMap.get(`${item.store_id}_${item.product_id}`) ?? 0
+                  return (
+                    <button key={`${item.store_id}_${item.product_id}`} onClick={() => selectProduct(item)}
+                      className={`flex w-full items-center justify-between border-b border-gray-100 px-3 py-2 text-left last:border-0 ${productId === item.product_id ? 'bg-blue-50' : 'bg-white'}`}>
+                      <span><span className="block text-[10px] text-gray-400">{item.product.brand}</span><span className="text-sm font-medium text-gray-700">{item.product.name}</span></span>
+                      <span className={`ml-3 shrink-0 text-xs ${itemStock < 0 ? 'font-bold text-red-600' : 'text-gray-500'}`}>在庫 {itemStock}</span>
+                    </button>
+                  )
+                })}
+              </div>
+            ))}
+            {availableCount === 0 && <p className="px-3 py-8 text-center text-sm text-gray-400">該当商品がありません</p>}
           </div>
 
           {selectedProduct && (
