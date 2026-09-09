@@ -125,7 +125,17 @@ function MovementCell({ movements }: { movements: InventoryMovement[] }) {
   )
 }
 
-function InventoryHistoryTable({ stores, products, year, month }: { stores: Store[]; products: Product[]; year: number; month: number }) {
+function InventoryHistoryTable({ stores, products, year, month, categories, selectedCat, onSelectCat, onPrevMonth, onNextMonth }: {
+  stores: Store[]
+  products: Product[]
+  year: number
+  month: number
+  categories: Category[]
+  selectedCat: number | null
+  onSelectCat: (categoryId: number) => void
+  onPrevMonth: () => void
+  onNextMonth: () => void
+}) {
   const [movements, setMovements] = useState<InventoryMovement[]>([])
   const [assignments, setAssignments] = useState<StoreAssignment[]>([])
   const [loading, setLoading] = useState(false)
@@ -231,6 +241,19 @@ function InventoryHistoryTable({ stores, products, year, month }: { stores: Stor
           <p className="text-xs text-gray-400">店舗入力・入荷・店舗移動・販売をすべて同じ表に反映</p>
         </div>
         <button onClick={() => void loadHistory()} className="shrink-0 rounded-lg bg-gray-100 px-3 py-1.5 text-xs text-gray-600">更新</button>
+      </div>
+      <div className="mx-3 mb-2 flex items-center gap-1">
+        <button onClick={onPrevMonth} className="rounded border border-gray-200 px-2 py-1 text-sm">‹</button>
+        <span className="px-1 text-sm font-medium">{year}年{month}月</span>
+        <button onClick={onNextMonth} className="rounded border border-gray-200 px-2 py-1 text-sm">›</button>
+      </div>
+      <div className="mx-3 mb-2 flex gap-1 overflow-x-auto pb-1">
+        {categories.map((cat) => (
+          <button key={cat.id} onClick={() => onSelectCat(cat.id)}
+            className={`shrink-0 rounded-full px-3 py-1 text-xs font-medium ${selectedCat === cat.id ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-600'}`}>
+            {cat.name}
+          </button>
+        ))}
       </div>
       <div className="mx-3 mb-3 flex gap-1 overflow-x-auto pb-1">
         <button onClick={() => setSelectedStoreId('all')}
@@ -870,11 +893,6 @@ export default function AdminPage() {
           <Link href="/" className="text-xs text-blue-500 shrink-0">← 入力</Link>
           <Link href="/admin/operations" className="rounded bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 shrink-0">入出庫</Link>
           <Link href="/admin/products" className="rounded bg-purple-50 px-2 py-1 text-xs font-medium text-purple-700 shrink-0">商品管理</Link>
-          <div className="flex items-center gap-1">
-            <button onClick={prevMonth} className="px-2 py-1 rounded border border-gray-200 text-sm">‹</button>
-            <span className="text-sm font-medium px-1">{year}年{month}月</span>
-            <button onClick={nextMonth} className="px-2 py-1 rounded border border-gray-200 text-sm">›</button>
-          </div>
           <button
             disabled
             title="9月の運用開始までに月締め機能を反映します"
@@ -882,26 +900,22 @@ export default function AdminPage() {
           >
             月締め（9月開始）
           </button>
-          <div className="ml-auto flex gap-1 text-xs">
-            <span className="px-1.5 py-0.5 rounded bg-blue-100 text-blue-700">業務</span>
-            <span className="px-1.5 py-0.5 rounded bg-green-100 text-green-700">店販</span>
-            <span className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-700">個人</span>
-          </div>
-        </div>
-        {/* カテゴリタブ */}
-        <div className="flex overflow-x-auto gap-1 px-3 pb-2">
-          {categories.map(cat => (
-            <button key={cat.id} onClick={() => setSelectedCat(cat.id)}
-              className={`shrink-0 px-3 py-1 rounded-full text-xs font-medium ${selectedCat === cat.id ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-600'}`}>
-              {cat.name}
-            </button>
-          ))}
         </div>
       </div>
 
       <HqOverview stores={stores} categories={categories} />
 
-      <InventoryHistoryTable stores={stores} products={products} year={year} month={month} />
+      <InventoryHistoryTable
+        stores={stores}
+        products={products}
+        year={year}
+        month={month}
+        categories={categories}
+        selectedCat={selectedCat}
+        onSelectCat={setSelectedCat}
+        onPrevMonth={prevMonth}
+        onNextMonth={nextMonth}
+      />
 
       {/* テーブル */}
       <div className="hidden">
