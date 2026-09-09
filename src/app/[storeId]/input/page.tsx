@@ -305,7 +305,7 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
               value={date}
               onChange={(e) => void handleDateChange(e.target.value)}
               disabled={completed}
-              className="text-xs text-blue-600 text-center border-none outline-none bg-transparent"
+              className="text-base text-blue-600 text-center border-none outline-none bg-transparent"
             />
           </div>
           <button onClick={handleLogout} className="text-xs text-gray-400 underline">退出</button>
@@ -333,7 +333,7 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             placeholder="商品名・ブランドで検索"
-            className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-2.5 text-sm outline-none focus:border-blue-400 focus:bg-white"
+            className="w-full rounded-xl border border-gray-200 bg-gray-50 px-4 py-2 text-base outline-none focus:border-blue-400 focus:bg-white"
           />
         </label>
       </div>

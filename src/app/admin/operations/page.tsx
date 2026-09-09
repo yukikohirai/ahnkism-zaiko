@@ -256,7 +256,7 @@ export default function OperationsPage() {
 
         <section className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
           <label className="block text-xs font-medium text-gray-500">日付
-            <input type="date" value={date} onChange={(event) => setDate(event.target.value)} className="mt-1 block w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm" />
+            <input type="date" value={date} onChange={(event) => setDate(event.target.value)} className="mt-1 block w-full rounded-xl border border-gray-200 px-3 py-2 text-base" />
           </label>
 
           {mode === 'transfer' ? (
@@ -273,14 +273,14 @@ export default function OperationsPage() {
           {mode === 'adjustment' && <p className="mt-3 rounded-xl bg-blue-50 px-3 py-2 text-xs text-blue-700">数えた実際の在庫数を入力すると、差分だけを「誤差調整」として記録します。</p>}
           {mode === 'reduction' && (
             <label className="mt-3 block text-xs font-medium text-gray-500">減少理由
-              <select value={reason} onChange={(event) => setReason(event.target.value as typeof reason)} className="mt-1 block w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm">
+              <select value={reason} onChange={(event) => setReason(event.target.value as typeof reason)} className="mt-1 block w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-base">
                 <option value="usage">業務利用</option><option value="retail_sale">店販販売</option><option value="personal_sale">個人販売</option>
               </select>
             </label>
           )}
 
           <label className="mt-4 block text-xs font-medium text-gray-500">商品検索
-            <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="商品名・ブランドで検索" className="mt-1 block w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm outline-none focus:border-blue-400" />
+            <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="商品名・ブランドで検索" className="mt-1 block w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-base outline-none focus:border-blue-400" />
           </label>
           <div className="mt-2 max-h-[60dvh] overflow-y-auto rounded-xl border border-gray-100">
             {productGroups.map((group) => (
@@ -350,7 +350,7 @@ export default function OperationsPage() {
 function StoreSelect({ label, stores, value, onChange }: { label: string; stores: Store[]; value: number | null; onChange: (value: number) => void }) {
   return (
     <label className="block text-xs font-medium text-gray-500">{label}
-      <select value={value ?? ''} onChange={(event) => onChange(Number(event.target.value))} className="mt-1 block w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm">
+      <select value={value ?? ''} onChange={(event) => onChange(Number(event.target.value))} className="mt-1 block w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-base">
         {stores.map((store) => <option key={store.id} value={store.id}>{store.name}</option>)}
       </select>
     </label>

@@ -560,7 +560,7 @@ function HqOverview({ stores, categories }: { stores: Store[]; categories: Categ
           </div>
           <input type="search" value={search} onChange={(event) => setSearch(event.target.value)}
             placeholder="商品名・ブランドで検索"
-            className="mt-2 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm outline-none focus:border-blue-400" />
+            className="mt-2 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-base outline-none focus:border-blue-400" />
         </div>
 
         {loading ? (
@@ -661,7 +661,7 @@ function HqOverview({ stores, categories }: { stores: Store[]; categories: Categ
                         {baseRow && editRequiredKey === editKey ? (
                           <input type="number" min="0" value={editRequiredValue} onChange={(event) => setEditRequiredValue(event.target.value)}
                             onBlur={() => void saveStoreRequired(baseRow)} onKeyDown={(event) => event.key === 'Enter' && void saveStoreRequired(baseRow)}
-                            className="w-14 rounded border border-blue-300 px-1 py-1 text-center outline-none" autoFocus />
+                            className="w-14 rounded border border-blue-300 px-1 py-1 text-center text-base outline-none" autoFocus />
                         ) : (
                           <button onClick={() => { if (!baseRow) return; setEditRequiredKey(editKey); setEditRequiredValue(String(baseRow.required_qty)) }}
                             className="rounded bg-purple-50 px-3 py-1 font-bold text-purple-700">{baseRow?.required_qty ?? 0}</button>
@@ -713,7 +713,7 @@ function HqOverview({ stores, categories }: { stores: Store[]; categories: Categ
                         {editRequiredKey === editKey ? (
                           <input type="number" min="0" value={editRequiredValue} onChange={(event) => setEditRequiredValue(event.target.value)}
                             onBlur={() => void saveStoreRequired(row)} onKeyDown={(event) => event.key === 'Enter' && void saveStoreRequired(row)}
-                            className="w-14 rounded border border-blue-300 px-1 py-1 text-center outline-none" autoFocus />
+                            className="w-14 rounded border border-blue-300 px-1 py-1 text-center text-base outline-none" autoFocus />
                         ) : (
                           <button onClick={() => { setEditRequiredKey(editKey); setEditRequiredValue(String(row.required_qty)) }}
                             className="rounded bg-purple-50 px-3 py-1 font-bold text-purple-700">{row.required_qty}</button>
@@ -983,7 +983,7 @@ export default function AdminPage() {
                                 onChange={e => setEditVal(e.target.value)}
                                 onBlur={() => saveReceipt(p.id, d)}
                                 onKeyDown={e => e.key === 'Enter' && saveReceipt(p.id, d)}
-                                className="w-full text-center text-xs py-1 outline-none bg-green-50"
+                                className="w-full text-center text-base py-1 outline-none bg-green-50"
                                 autoFocus
                               />
                             ) : (

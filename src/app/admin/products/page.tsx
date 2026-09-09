@@ -427,10 +427,10 @@ export default function ProductManagementPage() {
             <h2 className="font-bold text-gray-800">並び替え</h2>
             <p className="mt-0.5 text-xs text-gray-400">店舗の入力画面に出てくる順番を変えます。店舗ごと・カテゴリごとに設定します。</p>
             <div className="mt-3 flex gap-2">
-              <select value={sortStoreId ?? ''} onChange={(event) => setSortStoreId(Number(event.target.value))} className="flex-1 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm">
+              <select value={sortStoreId ?? ''} onChange={(event) => setSortStoreId(Number(event.target.value))} className="flex-1 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-base">
                 {stores.map((store) => <option key={store.id} value={store.id}>{store.name}</option>)}
               </select>
-              <select value={sortCategoryId ?? ''} onChange={(event) => setSortCategoryId(Number(event.target.value))} className="flex-1 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm">
+              <select value={sortCategoryId ?? ''} onChange={(event) => setSortCategoryId(Number(event.target.value))} className="flex-1 rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-base">
                 {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
               </select>
             </div>
@@ -465,7 +465,7 @@ export default function ProductManagementPage() {
               <h2 className="font-bold text-gray-800">{showStopped ? '停止中の商品' : '取扱中の商品'}</h2>
               <button onClick={() => setShowStopped((value) => !value)} className="rounded-lg bg-gray-100 px-3 py-1.5 text-xs text-gray-600">{showStopped ? '取扱中を見る' : '停止中を見る'}</button>
             </div>
-            <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="ディーラー・メーカー・ブランド・商品名で検索" className="mt-3 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2.5 text-sm outline-none focus:border-blue-400" />
+            <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="ディーラー・メーカー・ブランド・商品名で検索" className="mt-3 w-full rounded-xl border border-gray-200 bg-gray-50 px-3 py-2 text-base outline-none focus:border-blue-400" />
           </div>
           <div className="max-h-[600px] divide-y divide-gray-100 overflow-y-auto">
             {filteredProducts.map((product) => (
@@ -540,7 +540,7 @@ function PickField({ label, value, onChange, options, placeholder }: { label: st
   if (creating) {
     return (
       <label className="block text-xs font-medium text-gray-500">{label}
-        <input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} autoFocus className="mt-1 block w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm outline-none focus:border-blue-400" />
+        <input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} autoFocus className="mt-1 block w-full rounded-xl border border-gray-200 px-3 py-2 text-base outline-none focus:border-blue-400" />
         {clash && <span className="mt-1 block text-[11px] font-normal text-amber-600">「{clash}」とほぼ同じです。表記ゆれになるので、一覧から選び直すことをおすすめします。</span>}
         <button type="button" onClick={() => { setCreating(false); onChange('') }} className="mt-1 text-[11px] font-normal text-blue-600 underline">一覧から選ぶ</button>
       </label>
@@ -555,7 +555,7 @@ function PickField({ label, value, onChange, options, placeholder }: { label: st
           if (event.target.value === '__new__') { setCreating(true); onChange('') }
           else onChange(event.target.value)
         }}
-        className="mt-1 block w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm"
+        className="mt-1 block w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-base"
       >
         <option value="">（未設定）</option>
         {options.map((option) => <option key={option} value={option}>{option}</option>)}
@@ -577,14 +577,14 @@ function CategoryField({ label, categories, selectedId, onSelect, newName, onNew
           if (event.target.value === '__new__') { onSelect(null); onNewName(' ') }
           else { onNewName(''); onSelect(Number(event.target.value)) }
         }}
-        className="mt-1 block w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm"
+        className="mt-1 block w-full rounded-xl border border-gray-200 bg-white px-3 py-2 text-base"
       >
         {categories.map((category) => <option key={category.id} value={category.id}>{category.name}</option>)}
         <option value="__new__">＋ 新しく作る</option>
       </select>
       {creating && (
         <>
-          <input value={newName.trimStart()} onChange={(event) => onNewName(event.target.value)} placeholder="新しいカテゴリ名" autoFocus className="mt-2 block w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm outline-none focus:border-blue-400" />
+          <input value={newName.trimStart()} onChange={(event) => onNewName(event.target.value)} placeholder="新しいカテゴリ名" autoFocus className="mt-2 block w-full rounded-xl border border-gray-200 px-3 py-2 text-base outline-none focus:border-blue-400" />
           {clash
             ? <span className="mt-1 block text-[11px] font-normal text-amber-600">「{clash.name}」がすでにあります。保存するとそちらにまとめられます。</span>
             : <span className="mt-1 block text-[11px] font-normal text-gray-400">新しいカテゴリは一番後ろに追加されます。</span>}
@@ -597,7 +597,7 @@ function CategoryField({ label, categories, selectedId, onSelect, newName, onNew
 function TextField({ label, value, onChange, placeholder }: { label: string; value: string; onChange: (value: string) => void; placeholder: string }) {
   return (
     <label className="block text-xs font-medium text-gray-500">{label}
-      <input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} className="mt-1 block w-full rounded-xl border border-gray-200 px-3 py-2.5 text-sm outline-none focus:border-blue-400" />
+      <input value={value} onChange={(event) => onChange(event.target.value)} placeholder={placeholder} className="mt-1 block w-full rounded-xl border border-gray-200 px-3 py-2 text-base outline-none focus:border-blue-400" />
     </label>
   )
 }
