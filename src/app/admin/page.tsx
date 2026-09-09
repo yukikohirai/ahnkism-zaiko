@@ -568,7 +568,7 @@ function HqOverview({ stores, categories }: { stores: Store[]; categories: Categ
         ) : selectedView === 'retail' ? (
           <div className="max-h-[460px] overflow-auto">
             <table className="w-max text-xs">
-              <thead className="sticky top-0 bg-gray-50 text-gray-500">
+              <thead className="sticky top-0 z-20 bg-gray-50 text-gray-500">
                 <tr>
                   <th className="w-[320px] px-3 py-2 text-left">商品</th>
                   {stores.map((store) => <th key={store.id} className="w-16 px-2 py-2 text-center">{store.name}</th>)}
@@ -587,8 +587,9 @@ function HqOverview({ stores, categories }: { stores: Store[]; categories: Categ
                   const rows: React.ReactNode[] = []
                   if (isNewSupplier) {
                     rows.push(
-                      <tr key={`${item.product.id}_supplier`} className="bg-slate-100">
-                        <td colSpan={stores.length + 2} className="px-3 py-2 text-sm font-bold text-slate-700">{currentSupplier}</td>
+                      <tr key={`${item.product.id}_supplier`}>
+                        {/* 発注先の見出しはスクロール中も上に残す。top-8 = ヘッダー行の高さ */}
+                        <td colSpan={stores.length + 2} className="sticky top-8 z-10 bg-slate-100 px-3 py-2 text-sm font-bold text-slate-700">{currentSupplier}</td>
                       </tr>
                     )
                   }
@@ -625,7 +626,7 @@ function HqOverview({ stores, categories }: { stores: Store[]; categories: Categ
         ) : selectedView === 'shared' ? (
           <div className="max-h-[460px] overflow-auto">
             <table className="w-max text-xs">
-              <thead className="sticky top-0 bg-gray-50 text-gray-500">
+              <thead className="sticky top-0 z-20 bg-gray-50 text-gray-500">
                 <tr>
                   <th className="w-[320px] px-3 py-2 text-left">商品</th>
                   <th className="w-16 px-2 py-2 text-center">繰越</th>
@@ -677,7 +678,7 @@ function HqOverview({ stores, categories }: { stores: Store[]; categories: Categ
         ) : (
           <div className="max-h-[460px] overflow-auto">
             <table className="w-max text-xs">
-              <thead className="sticky top-0 bg-gray-50 text-gray-500">
+              <thead className="sticky top-0 z-20 bg-gray-50 text-gray-500">
                 <tr><th className="w-[320px] px-3 py-2 text-left">商品</th><th className="w-16 px-2 py-2 text-center">現在庫</th><th className="w-16 px-2 py-2 text-center">必要数</th><th className="w-16 px-3 py-2 text-center">不足</th></tr>
               </thead>
               <tbody>
@@ -693,8 +694,9 @@ function HqOverview({ stores, categories }: { stores: Store[]; categories: Categ
                   const rows: React.ReactNode[] = []
                   if (isNewSupplier) {
                     rows.push(
-                      <tr key={`${editKey}_supplier`} className="bg-slate-100">
-                        <td colSpan={4} className="px-3 py-2 text-sm font-bold text-slate-700">{currentSupplier}</td>
+                      <tr key={`${editKey}_supplier`}>
+                        {/* 発注先の見出しはスクロール中も上に残す。top-8 = ヘッダー行の高さ */}
+                        <td colSpan={4} className="sticky top-8 z-10 bg-slate-100 px-3 py-2 text-sm font-bold text-slate-700">{currentSupplier}</td>
                       </tr>
                     )
                   }
