@@ -567,12 +567,12 @@ function HqOverview({ stores, categories }: { stores: Store[]; categories: Categ
           <p className="py-10 text-center text-sm text-gray-400">読み込み中...</p>
         ) : selectedView === 'retail' ? (
           <div className="max-h-[460px] overflow-auto">
-            <table className="w-full min-w-[560px] text-xs">
+            <table className="w-max text-xs">
               <thead className="sticky top-0 bg-gray-50 text-gray-500">
                 <tr>
-                  <th className="px-3 py-2 text-left">商品</th>
-                  {stores.map((store) => <th key={store.id} className="px-2 py-2 text-center">{store.name}</th>)}
-                  <th className="px-3 py-2 text-center">全店計</th>
+                  <th className="w-[320px] px-3 py-2 text-left">商品</th>
+                  {stores.map((store) => <th key={store.id} className="w-16 px-2 py-2 text-center">{store.name}</th>)}
+                  <th className="w-16 px-3 py-2 text-center">全店計</th>
                 </tr>
               </thead>
               <tbody>
@@ -601,9 +601,9 @@ function HqOverview({ stores, categories }: { stores: Store[]; categories: Categ
                   }
                   rows.push(
                     <tr key={item.product.id} className="border-t border-gray-100">
-                      <td className="px-3 py-2">
+                      <td className="w-[320px] max-w-[320px] px-3 py-2">
                         <div className="text-[10px] text-gray-400">{item.product.brand}</div>
-                        <div className="font-medium text-gray-700">{item.product.name}</div>
+                        <div className="break-words font-medium text-gray-700">{item.product.name}</div>
                       </td>
                       {stores.map((store) => {
                         const storeStock = stockByStore.get(store.id)
@@ -624,15 +624,15 @@ function HqOverview({ stores, categories }: { stores: Store[]; categories: Categ
           </div>
         ) : selectedView === 'shared' ? (
           <div className="max-h-[460px] overflow-auto">
-            <table className="w-full min-w-[620px] text-xs">
+            <table className="w-max text-xs">
               <thead className="sticky top-0 bg-gray-50 text-gray-500">
                 <tr>
-                  <th className="px-3 py-2 text-left">商品</th>
-                  <th className="px-2 py-2 text-center">繰越</th>
-                  {stores.map((store) => <th key={store.id} className="px-2 py-2 text-center">{store.name}</th>)}
-                  <th className="px-2 py-2 text-center">入荷</th>
-                  <th className="px-2 py-2 text-center">現在庫</th>
-                  <th className="px-3 py-2 text-center">必要数</th>
+                  <th className="w-[320px] px-3 py-2 text-left">商品</th>
+                  <th className="w-16 px-2 py-2 text-center">繰越</th>
+                  {stores.map((store) => <th key={store.id} className="w-16 px-2 py-2 text-center">{store.name}</th>)}
+                  <th className="w-16 px-2 py-2 text-center">入荷</th>
+                  <th className="w-16 px-2 py-2 text-center">現在庫</th>
+                  <th className="w-16 px-3 py-2 text-center">必要数</th>
                 </tr>
               </thead>
               <tbody>
@@ -646,9 +646,9 @@ function HqOverview({ stores, categories }: { stores: Store[]; categories: Categ
                   const editKey = baseRow ? `${baseRow.store_id}_${baseRow.product_id}` : `shared_${item.product.id}`
                   return (
                     <tr key={item.product.id} className="border-t border-gray-100">
-                      <td className="px-3 py-2">
+                      <td className="w-[320px] max-w-[320px] px-3 py-2">
                         <div className="text-[10px] text-gray-400">{item.product.manufacturer}</div>
-                        <div className="font-medium text-gray-700">{item.product.name}</div>
+                        <div className="break-words font-medium text-gray-700">{item.product.name}</div>
                       </td>
                       <td className="px-2 py-2 text-center text-gray-500">{carryOver}</td>
                       {stores.map((store) => {
@@ -676,9 +676,9 @@ function HqOverview({ stores, categories }: { stores: Store[]; categories: Categ
           </div>
         ) : (
           <div className="max-h-[460px] overflow-auto">
-            <table className="w-full text-xs">
+            <table className="w-max text-xs">
               <thead className="sticky top-0 bg-gray-50 text-gray-500">
-                <tr><th className="px-3 py-2 text-left">商品</th><th className="px-2 py-2 text-center">現在庫</th><th className="px-2 py-2 text-center">必要数</th><th className="px-3 py-2 text-center">不足</th></tr>
+                <tr><th className="w-[320px] px-3 py-2 text-left">商品</th><th className="w-16 px-2 py-2 text-center">現在庫</th><th className="w-16 px-2 py-2 text-center">必要数</th><th className="w-16 px-3 py-2 text-center">不足</th></tr>
               </thead>
               <tbody>
                 {storeRows.flatMap((row, index) => {
@@ -707,7 +707,7 @@ function HqOverview({ stores, categories }: { stores: Store[]; categories: Categ
                   }
                   rows.push(
                     <tr key={editKey} className="border-t border-gray-100">
-                      <td className="px-3 py-2"><div className="text-[10px] text-gray-400">{row.product.brand}</div><div className="font-medium text-gray-700">{row.product.name}</div></td>
+                      <td className="w-[320px] max-w-[320px] px-3 py-2"><div className="text-[10px] text-gray-400">{row.product.brand}</div><div className="break-words font-medium text-gray-700">{row.product.name}</div></td>
                       <td className={`px-2 py-2 text-center font-bold ${stock < 0 || stock < row.required_qty ? 'text-red-600' : 'text-gray-700'}`}>{stock}</td>
                       <td className="px-2 py-2 text-center">
                         {editRequiredKey === editKey ? (
