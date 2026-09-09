@@ -41,6 +41,7 @@ const MOVEMENT_META: Record<string, { short: string; label: string; className: s
   adjustment: { short: '調', label: '在庫調整', className: 'bg-gray-100 text-gray-700' },
 }
 
+const SHARED_CATEGORY_NAME = '全店在庫'
 const MOVEMENT_ORDER = ['purchase_order', 'transfer_in', 'transfer_out', 'usage', 'retail_sale', 'personal_sale', 'adjustment']
 const TYPE_CYCLE: Record<string, string> = { '業務': '店販', '店販': '個人', '個人': '業務' }
 const TYPE_COLOR: Record<string, string> = {
@@ -330,7 +331,8 @@ function HqOverview({ stores, categories }: { stores: Store[]; categories: Categ
         .eq('products.is_active', true),
       supabase.from('inventory_movements')
         .select('store_id, product_id, quantity')
-        .order('created_at'),
+        .order('created_at')
+        .limit(20000),
     ])
 
     const sessionRows = (sessionResult.data ?? []) as SessionSummary[]
@@ -376,6 +378,17 @@ function HqOverview({ stores, categories }: { stores: Store[]; categories: Categ
     return map
   }, [movements])
 
+  const movementSplit = useMemo(() => {
+    const outgoing = new Map<string, number>()
+    const incoming = new Map<string, number>()
+    movements.forEach((item) => {
+      const key = `${item.store_id}_${item.product_id}`
+      if (item.quantity < 0) outgoing.set(key, (outgoing.get(key) ?? 0) + item.quantity)
+      else incoming.set(key, (incoming.get(key) ?? 0) + item.quantity)
+    })
+    return { outgoing, incoming }
+  }, [movements])
+
   const currentStock = useCallback((row: StoreProductSummary) => (
     row.opening_stock + (movementMap.get(`${row.store_id}_${row.product_id}`) ?? 0)
   ), [movementMap])
@@ -400,11 +413,18 @@ function HqOverview({ stores, categories }: { stores: Store[]; categories: Categ
     categories.filter((category) => /店販|オージュア|aujua/i.test(category.name)).map((category) => category.id)
   ), [categories])
   const categoryNameMap = useMemo(() => new Map(categories.map((category) => [category.id, category.name])), [categories])
-  const selectedStoreId = selectedView === 'retail' ? null : Number(selectedView)
+  const sharedCategoryId = useMemo(() => (
+    categories.find((category) => category.name === SHARED_CATEGORY_NAME)?.id ?? null
+  ), [categories])
+  const isSharedRow = useCallback((row: StoreProductSummary) => (
+    sharedCategoryId !== null && row.product.category_id === sharedCategoryId
+  ), [sharedCategoryId])
+  const selectedStoreId = selectedView === 'retail' || selectedView === 'shared' ? null : Number(selectedView)
   const storeRows = useMemo(() => {
     if (selectedStoreId === null) return []
     const filtered = assignments
       .filter((row) => row.store_id === selectedStoreId)
+      .filter((row) => !isSharedRow(row))
       .filter((row) => !normalizedSearch || normalizeSearch(`${supplierName(row)}${row.product.manufacturer ?? ''}${row.product.brand ?? ''}${row.product.name}`).includes(normalizedSearch))
     return sortBySheetGroups(
       filtered,
@@ -412,11 +432,11 @@ function HqOverview({ stores, categories }: { stores: Store[]; categories: Categ
       (row) => row.product.category_id,
       (row) => row.sort_order,
     )
-  }, [assignments, normalizedSearch, selectedStoreId])
+  }, [assignments, isSharedRow, normalizedSearch, selectedStoreId])
 
   const retailRows = useMemo(() => {
     const grouped = new Map<number, { product: StoreProductSummary['product']; rows: StoreProductSummary[] }>()
-    assignments.filter((row) => retailCategoryIds.has(row.product.category_id)).forEach((row) => {
+    assignments.filter((row) => retailCategoryIds.has(row.product.category_id) && !isSharedRow(row)).forEach((row) => {
       const current = grouped.get(row.product_id) ?? { product: row.product, rows: [] }
       current.rows.push(row)
       grouped.set(row.product_id, current)
@@ -429,7 +449,23 @@ function HqOverview({ stores, categories }: { stores: Store[]; categories: Categ
       (item) => item.product.category_id,
       (item) => Math.min(...item.rows.map((row) => row.sort_order)),
     )
-  }, [assignments, normalizedSearch, retailCategoryIds])
+  }, [assignments, isSharedRow, normalizedSearch, retailCategoryIds])
+
+  const sharedRows = useMemo(() => {
+    if (sharedCategoryId === null) return []
+    const grouped = new Map<number, { product: StoreProductSummary['product']; rows: StoreProductSummary[] }>()
+    assignments.filter((row) => row.product.category_id === sharedCategoryId).forEach((row) => {
+      const current = grouped.get(row.product_id) ?? { product: row.product, rows: [] }
+      current.rows.push(row)
+      grouped.set(row.product_id, current)
+    })
+    return Array.from(grouped.values())
+      .filter((item) => !normalizedSearch || normalizeSearch(`${item.product.manufacturer ?? ''}${item.product.brand ?? ''}${item.product.name}`).includes(normalizedSearch))
+      .sort((a, b) => (
+        Math.min(...a.rows.map((row) => row.sort_order)) - Math.min(...b.rows.map((row) => row.sort_order))
+        || a.product.id - b.product.id
+      ))
+  }, [assignments, normalizedSearch, sharedCategoryId])
 
   return (
     <section className="mx-3 mt-3 space-y-3">
@@ -471,6 +507,12 @@ function HqOverview({ stores, categories }: { stores: Store[]; categories: Categ
               className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-medium ${selectedView === 'retail' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-600'}`}>
               全店 店販・Aujua
             </button>
+            {sharedCategoryId !== null && (
+              <button onClick={() => setSelectedView('shared')}
+                className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-medium ${selectedView === 'shared' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-600'}`}>
+                全店在庫
+              </button>
+            )}
             {stores.map((store) => (
               <button key={store.id} onClick={() => setSelectedView(String(store.id))}
                 className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-medium ${selectedView === String(store.id) ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-600'}`}>
@@ -534,6 +576,58 @@ function HqOverview({ stores, categories }: { stores: Store[]; categories: Categ
               </tbody>
             </table>
             {retailRows.length === 0 && <p className="py-10 text-center text-sm text-gray-400">該当商品がありません</p>}
+          </div>
+        ) : selectedView === 'shared' ? (
+          <div className="max-h-[460px] overflow-auto">
+            <table className="w-full min-w-[620px] text-xs">
+              <thead className="sticky top-0 bg-gray-50 text-gray-500">
+                <tr>
+                  <th className="px-3 py-2 text-left">商品</th>
+                  <th className="px-2 py-2 text-center">繰越</th>
+                  {stores.map((store) => <th key={store.id} className="px-2 py-2 text-center">{store.name}</th>)}
+                  <th className="px-2 py-2 text-center">入荷</th>
+                  <th className="px-2 py-2 text-center">現在庫</th>
+                  <th className="px-3 py-2 text-center">必要数</th>
+                </tr>
+              </thead>
+              <tbody>
+                {sharedRows.map((item) => {
+                  const sortedRows = [...item.rows].sort((a, b) => a.store_id - b.store_id)
+                  const baseRow = sortedRows.find((row) => row.store_id === stores[0]?.id) ?? sortedRows[0]
+                  const carryOver = baseRow?.opening_stock ?? 0
+                  const incoming = stores.reduce((sum, store) => sum + (movementSplit.incoming.get(`${store.id}_${item.product.id}`) ?? 0), 0)
+                  const totalMovement = item.rows.reduce((sum, row) => sum + (movementMap.get(`${row.store_id}_${row.product_id}`) ?? 0), 0)
+                  const stock = carryOver + totalMovement
+                  const editKey = baseRow ? `${baseRow.store_id}_${baseRow.product_id}` : `shared_${item.product.id}`
+                  return (
+                    <tr key={item.product.id} className="border-t border-gray-100">
+                      <td className="px-3 py-2">
+                        <div className="text-[10px] text-gray-400">{item.product.manufacturer}</div>
+                        <div className="font-medium text-gray-700">{item.product.name}</div>
+                      </td>
+                      <td className="px-2 py-2 text-center text-gray-500">{carryOver}</td>
+                      {stores.map((store) => {
+                        const used = -(movementSplit.outgoing.get(`${store.id}_${item.product.id}`) ?? 0)
+                        return <td key={store.id} className="px-2 py-2 text-center font-medium text-gray-700">{used > 0 ? used : ''}</td>
+                      })}
+                      <td className="px-2 py-2 text-center font-medium text-emerald-700">{incoming > 0 ? incoming : ''}</td>
+                      <td className={`bg-blue-50 px-2 py-2 text-center font-bold ${baseRow && stock < baseRow.required_qty ? 'text-red-600' : 'text-blue-700'}`}>{stock}</td>
+                      <td className="px-3 py-2 text-center">
+                        {baseRow && editRequiredKey === editKey ? (
+                          <input type="number" min="0" value={editRequiredValue} onChange={(event) => setEditRequiredValue(event.target.value)}
+                            onBlur={() => void saveStoreRequired(baseRow)} onKeyDown={(event) => event.key === 'Enter' && void saveStoreRequired(baseRow)}
+                            className="w-14 rounded border border-blue-300 px-1 py-1 text-center outline-none" autoFocus />
+                        ) : (
+                          <button onClick={() => { if (!baseRow) return; setEditRequiredKey(editKey); setEditRequiredValue(String(baseRow.required_qty)) }}
+                            className="rounded bg-purple-50 px-3 py-1 font-bold text-purple-700">{baseRow?.required_qty ?? 0}</button>
+                        )}
+                      </td>
+                    </tr>
+                  )
+                })}
+              </tbody>
+            </table>
+            {sharedRows.length === 0 && <p className="py-10 text-center text-sm text-gray-400">該当商品がありません</p>}
           </div>
         ) : (
           <div className="max-h-[460px] overflow-auto">
