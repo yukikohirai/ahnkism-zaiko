@@ -253,12 +253,12 @@ function InventoryHistoryTable({ stores, products, year, month }: { stores: Stor
             <thead>
               <tr className="bg-gray-100">
                 <th className="sticky left-0 z-10 w-14 min-w-14 border border-gray-200 bg-gray-100 px-1 py-1.5 text-left text-[10px]">ブランド</th>
-                <th className="sticky left-[56px] z-10 w-28 min-w-28 border border-gray-200 bg-gray-100 px-1 py-1.5 text-left">商品名</th>
-                <th className="sticky left-[168px] z-10 w-10 min-w-10 border border-gray-200 bg-gray-100 px-1 py-1.5 text-center text-[10px] text-gray-500">店舗</th>
-                <th className="sticky left-[208px] z-10 w-9 min-w-9 border border-gray-200 bg-yellow-50 px-0.5 py-1.5 text-center text-[10px] font-bold text-gray-600">月計</th>
-                <th className="sticky left-[244px] z-10 w-9 min-w-9 border border-gray-200 bg-blue-50 px-0.5 py-1.5 text-center text-[10px] font-bold text-blue-700">業務</th>
-                <th className="sticky left-[280px] z-10 w-9 min-w-9 border border-gray-200 bg-green-50 px-0.5 py-1.5 text-center text-[10px] font-bold text-green-700">店販</th>
-                <th className="sticky left-[316px] z-10 w-9 min-w-9 border border-gray-200 bg-amber-50 px-0.5 py-1.5 text-center text-[10px] font-bold text-amber-700">個人</th>
+                <th className="sticky left-[56px] z-10 w-48 min-w-48 border border-gray-200 bg-gray-100 px-1 py-1.5 text-left">商品名</th>
+                <th className="sticky left-[248px] z-10 w-10 min-w-10 border border-gray-200 bg-gray-100 px-1 py-1.5 text-center text-[10px] text-gray-500">店舗</th>
+                <th className="sticky left-[288px] z-10 w-9 min-w-9 border border-gray-200 bg-yellow-50 px-0.5 py-1.5 text-center text-[10px] font-bold text-gray-600">月計</th>
+                <th className="sticky left-[324px] z-10 w-9 min-w-9 border border-gray-200 bg-blue-50 px-0.5 py-1.5 text-center text-[10px] font-bold text-blue-700">業務</th>
+                <th className="sticky left-[360px] z-10 w-9 min-w-9 border border-gray-200 bg-green-50 px-0.5 py-1.5 text-center text-[10px] font-bold text-green-700">店販</th>
+                <th className="sticky left-[396px] z-10 w-9 min-w-9 border border-gray-200 bg-amber-50 px-0.5 py-1.5 text-center text-[10px] font-bold text-amber-700">個人</th>
                 {days.map((day) => {
                   const dayOfWeek = dow(year, month, day)
                   return (
@@ -281,19 +281,19 @@ function InventoryHistoryTable({ stores, products, year, month }: { stores: Stor
                   const personalTotal = -(monthlyTypeMap.get(`${store.id}_${product.id}_personal_sale`) ?? 0)
                   return (
                     <tr key={`${product.id}_${store.id}`} className={rowBackground}>
-                      <td className={`sticky left-0 z-10 border border-gray-200 px-1 py-1 text-[9px] text-gray-400 ${rowBackground}`}>
+                      <td className={`sticky left-0 z-10 whitespace-normal break-words border border-gray-200 px-1 py-1 text-[9px] leading-snug text-gray-400 ${rowBackground}`}>
                         {storeIndex === 0 ? product.brand ?? '' : ''}
                       </td>
-                      <td title={product.name} className={`sticky left-[56px] z-10 max-w-28 overflow-hidden text-ellipsis whitespace-nowrap border border-gray-200 px-1 py-1 font-medium text-gray-700 ${rowBackground}`}>
+                      <td title={product.name} className={`sticky left-[56px] z-10 w-48 min-w-48 whitespace-normal break-words border border-gray-200 px-1 py-1 font-medium leading-snug text-gray-700 ${rowBackground}`}>
                         {storeIndex === 0 ? product.name : ''}
                       </td>
-                      <td className="sticky left-[168px] z-10 border border-gray-200 bg-gray-50 px-1 py-1 text-center text-[10px] font-medium text-gray-500">{store.name}</td>
-                      <td className={`sticky left-[208px] z-10 border border-gray-200 bg-yellow-50 px-0.5 py-1 text-center font-bold ${monthlyNet > 0 ? 'text-green-700' : monthlyNet < 0 ? 'text-red-600' : 'text-gray-300'}`}>
+                      <td className="sticky left-[248px] z-10 border border-gray-200 bg-gray-50 px-1 py-1 text-center text-[10px] font-medium text-gray-500">{store.name}</td>
+                      <td className={`sticky left-[288px] z-10 border border-gray-200 bg-yellow-50 px-0.5 py-1 text-center font-bold ${monthlyNet > 0 ? 'text-green-700' : monthlyNet < 0 ? 'text-red-600' : 'text-gray-300'}`}>
                         {monthlyNet === 0 ? '−' : signedQuantity(monthlyNet)}
                       </td>
-                      <td className={`sticky left-[244px] z-10 border border-gray-200 bg-blue-50 px-0.5 py-1 text-center font-bold ${usageTotal === 0 ? 'text-gray-300' : 'text-blue-700'}`}>{usageTotal === 0 ? '−' : usageTotal}</td>
-                      <td className={`sticky left-[280px] z-10 border border-gray-200 bg-green-50 px-0.5 py-1 text-center font-bold ${retailTotal === 0 ? 'text-gray-300' : 'text-green-700'}`}>{retailTotal === 0 ? '−' : retailTotal}</td>
-                      <td className={`sticky left-[316px] z-10 border border-gray-200 bg-amber-50 px-0.5 py-1 text-center font-bold ${personalTotal === 0 ? 'text-gray-300' : 'text-amber-700'}`}>{personalTotal === 0 ? '−' : personalTotal}</td>
+                      <td className={`sticky left-[324px] z-10 border border-gray-200 bg-blue-50 px-0.5 py-1 text-center font-bold ${usageTotal === 0 ? 'text-gray-300' : 'text-blue-700'}`}>{usageTotal === 0 ? '−' : usageTotal}</td>
+                      <td className={`sticky left-[360px] z-10 border border-gray-200 bg-green-50 px-0.5 py-1 text-center font-bold ${retailTotal === 0 ? 'text-gray-300' : 'text-green-700'}`}>{retailTotal === 0 ? '−' : retailTotal}</td>
+                      <td className={`sticky left-[396px] z-10 border border-gray-200 bg-amber-50 px-0.5 py-1 text-center font-bold ${personalTotal === 0 ? 'text-gray-300' : 'text-amber-700'}`}>{personalTotal === 0 ? '−' : personalTotal}</td>
                       {days.map((day) => {
                         const date = toDate(year, month, day)
                         const cellMovements = movementCellMap.get(`${store.id}_${product.id}_${date}`) ?? []

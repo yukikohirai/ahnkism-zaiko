@@ -5,6 +5,7 @@ import { getCurrentProfile, type UserProfile } from '@/lib/auth'
 import { supabase, type Store, type Category, type Product } from '@/lib/supabase'
 
 type ProductWithQty = Product & { qty: number }
+type CatalogProduct = Product & { category_name: string; category_sort_order: number }
 type InventorySession = { id: string; store_id: number; entry_date: string; status: 'draft' | 'completed' }
 
 function today() {
@@ -23,7 +24,7 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
   const [categories, setCategories] = useState<Category[]>([])
   const [activeCat, setActiveCat] = useState<number | null>(null)
   const [products, setProducts] = useState<ProductWithQty[]>([])
-  const [productCatalog, setProductCatalog] = useState<Product[]>([])
+  const [productCatalog, setProductCatalog] = useState<CatalogProduct[]>([])
   const [session, setSession] = useState<InventorySession | null>(null)
   const [draftLoaded, setDraftLoaded] = useState(false)
   const [draftQuantities, setDraftQuantities] = useState<Map<number, number>>(new Map())
@@ -65,20 +66,31 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
       supabase.from('categories').select('*').order('sort_order'),
       supabase
         .from('store_products')
-        .select('products!inner(id, category_id, brand, name, required_qty, sort_order)')
+        .select('sort_order, products!inner(id, category_id, brand, name, required_qty, sort_order)')
         .eq('store_id', Number(storeId))
         .eq('is_active', true)
         .eq('products.is_active', true),
     ])
     if (storeResult.data) setStore(storeResult.data)
 
+    const categoryList = categoryResult.data ?? []
+    const categoryById = new Map(categoryList.map((category) => [category.id, category]))
     const catalog = (assignmentResult.data ?? []).flatMap((row) => {
       const product = Array.isArray(row.products) ? row.products[0] : row.products
-      return product ? [product as Product] : []
+      if (!product) return []
+      const category = categoryById.get(product.category_id)
+      return [{
+        ...(product as Product),
+        sort_order: row.sort_order,
+        category_name: category?.name ?? '',
+        category_sort_order: category?.sort_order ?? 0,
+      } as CatalogProduct]
     })
+    // 検索は全カテゴリ横断のため、カテゴリ順 → 店舗ごとの並び順で保持する
+    catalog.sort((a, b) => a.category_sort_order - b.category_sort_order || a.sort_order - b.sort_order)
     setProductCatalog(catalog)
     const assignedCategoryIds = new Set(catalog.map((product) => product.category_id))
-    const availableCategories = (categoryResult.data ?? []).filter((category) => assignedCategoryIds.has(category.id))
+    const availableCategories = categoryList.filter((category) => assignedCategoryIds.has(category.id))
     setCategories(availableCategories)
     setActiveCat(availableCategories[0]?.id ?? null)
 
@@ -184,7 +196,7 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
     router.replace('/')
   }
 
-  async function adjust(id: number, delta: number) {
+  async function adjust(id: number, delta: number, categoryId: number) {
     if (!session || completed) return
     const current = draftQuantities.get(id) ?? 0
     const next = Math.max(0, current + delta)
@@ -199,14 +211,15 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
       updated_at: new Date().toISOString(),
     }, { onConflict: 'session_id,product_id' })
     let confirmationError = null
-    if (activeCat && confirmedCategories.has(activeCat)) {
+    // 検索中は他カテゴリの商品も編集できるため、確認解除は編集した商品のカテゴリに対して行う
+    if (confirmedCategories.has(categoryId)) {
       setConfirmedCategories((previous) => {
         const nextSet = new Set(previous)
-        nextSet.delete(activeCat)
+        nextSet.delete(categoryId)
         return nextSet
       })
       const confirmationResult = await supabase.from('inventory_session_categories').delete()
-        .eq('session_id', session.id).eq('category_id', activeCat)
+        .eq('session_id', session.id).eq('category_id', categoryId)
       confirmationError = confirmationResult.error
     }
     setPendingWrites((count) => Math.max(0, count - 1))
@@ -263,13 +276,15 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
   const confirmedCategoryCount = categories.filter((category) => confirmedCategories.has(category.id)).length
   const summaryProducts = productCatalog.filter((product) => (draftQuantities.get(product.id) ?? 0) > 0)
   const hasInput = summaryProducts.length > 0
-  const displayedProducts = useMemo(() => {
+  const searching = normalizeSearch(search).length > 0
+  const displayedProducts = useMemo<(Product & { category_name?: string })[]>(() => {
     const normalized = normalizeSearch(search)
-    return products.filter((product) => {
-      if (!normalized) return true
-      return [product.name, product.brand ?? ''].some((value) => normalizeSearch(value).includes(normalized))
-    })
-  }, [products, search])
+    // 検索中は選択中カテゴリに限らず、その店舗の取扱商品すべてから探す
+    const source: (Product & { category_name?: string })[] = normalized ? productCatalog : products
+    if (!normalized) return source
+    return source.filter((product) =>
+      [product.name, product.brand ?? ''].some((value) => normalizeSearch(value).includes(normalized)))
+  }, [products, productCatalog, search])
 
   if (!store) return <div className="flex items-center justify-center min-h-[100dvh] text-gray-400">読み込み中...</div>
 
@@ -330,31 +345,37 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
             この入力は完了済みです。店舗からは修正できません。
           </div>
         )}
-        {products.length === 0 && (
+        {searching && (
+          <p className="mb-2 text-center text-xs text-blue-600">全カテゴリから検索中</p>
+        )}
+        {!searching && products.length === 0 && (
           <p className="text-center text-gray-400 py-12">商品データがありません</p>
         )}
-        {products.length > 0 && displayedProducts.length === 0 && (
+        {displayedProducts.length === 0 && (searching || products.length > 0) && (
           <p className="text-center text-gray-400 py-12">該当する商品がありません</p>
         )}
-        {displayedProducts.map((product) => (
+        {displayedProducts.map((product) => {
+          const qty = draftQuantities.get(product.id) ?? 0
+          const subLabel = [searching ? product.category_name : '', product.brand ?? ''].filter(Boolean).join(' ・ ')
+          return (
           <div key={product.id} className="flex items-center justify-between py-3 border-b border-gray-100">
             <div className="flex-1 min-w-0 mr-3">
-              {product.brand && <div className="text-xs text-gray-400">{product.brand}</div>}
+              {subLabel && <div className="text-xs text-gray-400">{subLabel}</div>}
               <div className="text-base text-gray-800 font-medium leading-snug break-words">{product.name}</div>
             </div>
             <div className="flex items-center gap-2 shrink-0">
               <button
-                onClick={() => void adjust(product.id, -1)}
+                onClick={() => void adjust(product.id, -1, product.category_id)}
                 disabled={completed}
                 className="w-10 h-10 rounded-full bg-gray-100 text-xl text-gray-600 flex items-center justify-center active:bg-gray-200 disabled:opacity-40"
               >
                 −
               </button>
-              <span className={`w-8 text-center text-lg font-bold ${product.qty > 0 ? 'text-blue-600' : 'text-gray-300'}`}>
-                {product.qty}
+              <span className={`w-8 text-center text-lg font-bold ${qty > 0 ? 'text-blue-600' : 'text-gray-300'}`}>
+                {qty}
               </span>
               <button
-                onClick={() => void adjust(product.id, 1)}
+                onClick={() => void adjust(product.id, 1, product.category_id)}
                 disabled={completed}
                 className="w-10 h-10 rounded-full bg-blue-500 text-white text-xl flex items-center justify-center active:bg-blue-600 disabled:opacity-40"
               >
@@ -362,7 +383,8 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
               </button>
             </div>
           </div>
-        ))}
+          )
+        })}
         {saveError && <p className="mt-3 text-center text-sm text-red-500">{saveError}</p>}
       </div>
 
