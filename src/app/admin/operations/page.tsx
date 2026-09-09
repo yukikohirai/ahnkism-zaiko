@@ -6,7 +6,7 @@ import { useRouter } from 'next/navigation'
 import { getCurrentProfile } from '@/lib/auth'
 import { supabase } from '@/lib/supabase'
 
-type Mode = 'receipt' | 'transfer' | 'reduction'
+type Mode = 'receipt' | 'transfer' | 'reduction' | 'adjustment'
 type Store = { id: number; name: string }
 type Category = { id: number; name: string }
 type AssignedProduct = {
@@ -34,7 +34,7 @@ const MOVEMENT_LABELS: Record<string, string> = {
   usage: '業務利用',
   retail_sale: '店販販売',
   personal_sale: '個人販売',
-  adjustment: '在庫調整',
+  adjustment: '誤差調整',
 }
 
 function today() {
@@ -60,6 +60,7 @@ export default function OperationsPage() {
   const [toStoreId, setToStoreId] = useState<number | null>(null)
   const [productId, setProductId] = useState<number | null>(null)
   const [quantity, setQuantity] = useState(1)
+  const [actualStock, setActualStock] = useState('')
   const [reason, setReason] = useState<'usage' | 'retail_sale' | 'personal_sale'>('retail_sale')
   const [search, setSearch] = useState('')
   const [saving, setSaving] = useState(false)
@@ -121,7 +122,7 @@ export default function OperationsPage() {
   }, [authorized])
 
   useEffect(() => { void loadData() }, [loadData])
-  useEffect(() => { setProductId(null); setSearch(''); setMessage(''); setError('') }, [mode, storeId, fromStoreId, toStoreId])
+  useEffect(() => { setProductId(null); setSearch(''); setMessage(''); setError(''); setActualStock('') }, [mode, storeId, fromStoreId, toStoreId])
 
   const stockMap = useMemo(() => new Map(stockRows.map((row) => [`${row.store_id}_${row.product_id}`, row.current_stock])), [stockRows])
   const retailCategoryIds = useMemo(() => new Set(
@@ -148,10 +149,28 @@ export default function OperationsPage() {
   const selectedStock = selectedProduct
     ? stockMap.get(`${selectedProduct.store_id}_${selectedProduct.product_id}`) ?? 0
     : 0
+  const actualStockValue = actualStock === '' ? null : Math.max(0, parseInt(actualStock) || 0)
+  const adjustmentDiff = actualStockValue === null ? 0 : actualStockValue - selectedStock
+
+  function selectProduct(item: AssignedProduct) {
+    setProductId(item.product_id)
+    if (mode === 'adjustment') {
+      setActualStock(String(stockMap.get(`${item.store_id}_${item.product_id}`) ?? 0))
+    }
+  }
 
   async function handleSubmit() {
-    if (!productId || quantity < 1) {
-      setError('商品と数量を確認してください。')
+    if (!productId) {
+      setError('商品を選んでください。')
+      return
+    }
+    if (mode === 'adjustment') {
+      if (actualStockValue === null || adjustmentDiff === 0) {
+        setError('実際の在庫数を入力してください（今の在庫と同じ場合は登録不要です）。')
+        return
+      }
+    } else if (quantity < 1) {
+      setError('数量を確認してください。')
       return
     }
     setSaving(true)
@@ -178,22 +197,25 @@ export default function OperationsPage() {
         setSaving(false)
         return
       }
-      const movementType = mode === 'receipt' ? 'purchase_order' : reason
+      const movementType = mode === 'receipt' ? 'purchase_order' : mode === 'adjustment' ? 'adjustment' : reason
       const { error: submitError } = await supabase.rpc('record_inventory_operation', {
         p_occurred_on: date,
         p_store_id: storeId,
         p_product_id: productId,
-        p_quantity: quantity,
+        p_quantity: mode === 'adjustment' ? adjustmentDiff : quantity,
         p_movement_type: movementType,
-        p_note: null,
+        p_note: mode === 'adjustment' ? `誤差調整 実在庫 ${actualStockValue}（前 ${selectedStock}）` : null,
       })
       if (submitError) setError(submitError.message)
-      else setMessage(mode === 'receipt' ? '入荷・発注数を在庫へ加算しました。' : '在庫の減少理由を登録しました。')
+      else if (mode === 'receipt') setMessage('入荷・発注数を在庫へ加算しました。')
+      else if (mode === 'adjustment') setMessage(`誤差調整を登録しました（${selectedStock} → ${actualStockValue}）。`)
+      else setMessage('在庫の減少理由を登録しました。')
     }
     setSaving(false)
     setProductId(null)
     setSearch('')
     setQuantity(1)
+    setActualStock('')
     await loadData()
   }
 
@@ -209,13 +231,14 @@ export default function OperationsPage() {
       </header>
 
       <div className="mx-auto max-w-3xl p-4">
-        <div className="mb-4 grid grid-cols-3 gap-2 rounded-2xl bg-white p-2 shadow-sm">
+        <div className="mb-4 grid grid-cols-4 gap-2 rounded-2xl bg-white p-2 shadow-sm">
           {([
             ['receipt', '入荷・発注'],
             ['transfer', '店舗間移動'],
             ['reduction', '減少理由'],
+            ['adjustment', '誤差調整'],
           ] as [Mode, string][]).map(([value, label]) => (
-            <button key={value} onClick={() => setMode(value)} className={`rounded-xl px-2 py-3 text-sm font-bold ${mode === value ? 'bg-blue-500 text-white' : 'bg-gray-50 text-gray-600'}`}>{label}</button>
+            <button key={value} onClick={() => setMode(value)} className={`rounded-xl px-1 py-3 text-xs font-bold ${mode === value ? 'bg-blue-500 text-white' : 'bg-gray-50 text-gray-600'}`}>{label}</button>
           ))}
         </div>
 
@@ -235,6 +258,7 @@ export default function OperationsPage() {
           )}
 
           {mode === 'receipt' && <p className="mt-3 rounded-xl bg-blue-50 px-3 py-2 text-xs text-blue-700">現在の運用に合わせ、発注・入荷として入力した時点で店舗在庫へ加算します。</p>}
+          {mode === 'adjustment' && <p className="mt-3 rounded-xl bg-blue-50 px-3 py-2 text-xs text-blue-700">数えた実際の在庫数を入力すると、差分だけを「誤差調整」として記録します。</p>}
           {mode === 'reduction' && (
             <label className="mt-3 block text-xs font-medium text-gray-500">減少理由
               <select value={reason} onChange={(event) => setReason(event.target.value as typeof reason)} className="mt-1 block w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-sm">
@@ -250,10 +274,10 @@ export default function OperationsPage() {
             {availableProducts.map((item) => {
               const itemStock = stockMap.get(`${item.store_id}_${item.product_id}`) ?? 0
               return (
-                <button key={`${item.store_id}_${item.product_id}`} onClick={() => setProductId(item.product_id)}
+                <button key={`${item.store_id}_${item.product_id}`} onClick={() => selectProduct(item)}
                   className={`flex w-full items-center justify-between border-b border-gray-100 px-3 py-2 text-left last:border-0 ${productId === item.product_id ? 'bg-blue-50' : 'bg-white'}`}>
                   <span><span className="block text-[10px] text-gray-400">{item.product.brand}</span><span className="text-sm font-medium text-gray-700">{item.product.name}</span></span>
-                  <span className="ml-3 shrink-0 text-xs text-gray-500">在庫 {itemStock}</span>
+                  <span className={`ml-3 shrink-0 text-xs ${itemStock < 0 ? 'font-bold text-red-600' : 'text-gray-500'}`}>在庫 {itemStock}</span>
                 </button>
               )
             })}
@@ -262,19 +286,30 @@ export default function OperationsPage() {
 
           {selectedProduct && (
             <div className="mt-3 rounded-xl bg-gray-50 p-3">
-              <div className="text-xs text-gray-400">選択中・現在庫 {selectedStock}</div>
+              <div className="text-xs text-gray-400">選択中・現在庫 <span className={selectedStock < 0 ? 'font-bold text-red-600' : ''}>{selectedStock}</span></div>
               <div className="font-bold text-gray-800">{selectedProduct.product.brand} {selectedProduct.product.name}</div>
+              {mode === 'adjustment' && actualStockValue !== null && (
+                <div className={`mt-1 text-sm font-bold ${adjustmentDiff === 0 ? 'text-gray-400' : adjustmentDiff > 0 ? 'text-green-600' : 'text-red-600'}`}>
+                  今の在庫 {selectedStock} → 実在庫 {actualStockValue}（差分 {adjustmentDiff > 0 ? '+' : ''}{adjustmentDiff}）
+                </div>
+              )}
             </div>
           )}
 
-          <label className="mt-3 block text-xs font-medium text-gray-500">数量
-            <input type="number" min="1" step="1" value={quantity} onChange={(event) => setQuantity(Math.max(1, parseInt(event.target.value) || 1))} className="mt-1 block w-full rounded-xl border border-gray-200 px-3 py-3 text-center text-lg font-bold" />
-          </label>
+          {mode === 'adjustment' ? (
+            <label className="mt-3 block text-xs font-medium text-gray-500">実際の在庫数
+              <input type="number" min="0" step="1" value={actualStock} onChange={(event) => setActualStock(event.target.value)} placeholder="数えた在庫数" className="mt-1 block w-full rounded-xl border border-gray-200 px-3 py-3 text-center text-lg font-bold" />
+            </label>
+          ) : (
+            <label className="mt-3 block text-xs font-medium text-gray-500">数量
+              <input type="number" min="1" step="1" value={quantity} onChange={(event) => setQuantity(Math.max(1, parseInt(event.target.value) || 1))} className="mt-1 block w-full rounded-xl border border-gray-200 px-3 py-3 text-center text-lg font-bold" />
+            </label>
+          )}
           {message && <p className="mt-3 rounded-xl bg-green-50 px-3 py-2 text-sm text-green-700">{message}</p>}
           {error && <p className="mt-3 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}
-          <button onClick={() => void handleSubmit()} disabled={!productId || saving}
+          <button onClick={() => void handleSubmit()} disabled={!productId || saving || (mode === 'adjustment' && adjustmentDiff === 0)}
             className="mt-4 w-full rounded-xl bg-blue-500 py-3.5 font-bold text-white disabled:bg-gray-200 disabled:text-gray-400">
-            {saving ? '登録中...' : mode === 'transfer' ? '店舗間移動を登録' : mode === 'receipt' ? '在庫へ加算' : '減少を登録'}
+            {saving ? '登録中...' : mode === 'transfer' ? '店舗間移動を登録' : mode === 'receipt' ? '在庫へ加算' : mode === 'adjustment' ? '誤差調整を登録' : '減少を登録'}
           </button>
         </section>
 

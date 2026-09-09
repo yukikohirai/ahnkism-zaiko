@@ -38,7 +38,7 @@ const MOVEMENT_META: Record<string, { short: string; label: string; className: s
   usage: { short: '業', label: '業務利用', className: 'bg-blue-50 text-blue-700' },
   retail_sale: { short: '販', label: '店販販売', className: 'bg-green-50 text-green-700' },
   personal_sale: { short: '個', label: '個人販売', className: 'bg-amber-50 text-amber-700' },
-  adjustment: { short: '調', label: '在庫調整', className: 'bg-gray-100 text-gray-700' },
+  adjustment: { short: '調', label: '誤差調整', className: 'bg-gray-100 text-gray-700' },
 }
 
 const SHARED_CATEGORY_NAME = '全店在庫'
@@ -183,6 +183,14 @@ function InventoryHistoryTable({ stores, products, year, month }: { stores: Stor
     })
     return map
   }, [movements])
+  const monthlyTypeMap = useMemo(() => {
+    const map = new Map<string, number>()
+    movements.forEach((movement) => {
+      const key = `${movement.store_id}_${movement.product_id}_${movement.movement_type}`
+      map.set(key, (map.get(key) ?? 0) + movement.quantity)
+    })
+    return map
+  }, [movements])
   const storeIdsByProduct = useMemo(() => {
     const map = new Map<number, Set<number>>()
     assignments.forEach((assignment) => {
@@ -245,9 +253,13 @@ function InventoryHistoryTable({ stores, products, year, month }: { stores: Stor
           <table className="w-max table-fixed border-collapse text-xs">
             <thead>
               <tr className="bg-gray-100">
-                <th className="sticky left-0 z-10 w-20 min-w-20 border border-gray-200 bg-gray-100 px-1 py-1.5 text-left">ブランド</th>
-                <th className="sticky left-20 z-10 w-40 min-w-40 border border-gray-200 bg-gray-100 px-1 py-1.5 text-left">商品名</th>
-                <th className="w-14 min-w-14 border border-gray-200 bg-gray-100 px-1 py-1.5 text-center text-[10px] text-gray-500">店舗</th>
+                <th className="sticky left-0 z-10 w-14 min-w-14 border border-gray-200 bg-gray-100 px-1 py-1.5 text-left text-[10px]">ブランド</th>
+                <th className="sticky left-[56px] z-10 w-28 min-w-28 border border-gray-200 bg-gray-100 px-1 py-1.5 text-left">商品名</th>
+                <th className="sticky left-[168px] z-10 w-10 min-w-10 border border-gray-200 bg-gray-100 px-1 py-1.5 text-center text-[10px] text-gray-500">店舗</th>
+                <th className="sticky left-[208px] z-10 w-9 min-w-9 border border-gray-200 bg-yellow-50 px-0.5 py-1.5 text-center text-[10px] font-bold text-gray-600">月計</th>
+                <th className="sticky left-[244px] z-10 w-9 min-w-9 border border-gray-200 bg-blue-50 px-0.5 py-1.5 text-center text-[10px] font-bold text-blue-700">業務</th>
+                <th className="sticky left-[280px] z-10 w-9 min-w-9 border border-gray-200 bg-green-50 px-0.5 py-1.5 text-center text-[10px] font-bold text-green-700">店販</th>
+                <th className="sticky left-[316px] z-10 w-9 min-w-9 border border-gray-200 bg-amber-50 px-0.5 py-1.5 text-center text-[10px] font-bold text-amber-700">個人</th>
                 {days.map((day) => {
                   const dayOfWeek = dow(year, month, day)
                   return (
@@ -256,7 +268,6 @@ function InventoryHistoryTable({ stores, products, year, month }: { stores: Stor
                     </th>
                   )
                 })}
-                <th className="w-14 min-w-14 border border-gray-200 bg-yellow-50 px-1 py-1.5 text-center font-bold text-gray-600">月計</th>
               </tr>
             </thead>
             <tbody>
@@ -266,23 +277,29 @@ function InventoryHistoryTable({ stores, products, year, month }: { stores: Stor
                 const rowBackground = productIndex % 2 === 0 ? 'bg-white' : 'bg-gray-50'
                 return productStores.map((store, storeIndex) => {
                   const monthlyNet = monthlyNetMap.get(`${store.id}_${product.id}`) ?? 0
+                  const usageTotal = -(monthlyTypeMap.get(`${store.id}_${product.id}_usage`) ?? 0)
+                  const retailTotal = -(monthlyTypeMap.get(`${store.id}_${product.id}_retail_sale`) ?? 0)
+                  const personalTotal = -(monthlyTypeMap.get(`${store.id}_${product.id}_personal_sale`) ?? 0)
                   return (
                     <tr key={`${product.id}_${store.id}`} className={rowBackground}>
-                      <td className={`sticky left-0 z-10 border border-gray-200 px-1 py-1 text-[10px] text-gray-400 ${rowBackground}`}>
+                      <td className={`sticky left-0 z-10 border border-gray-200 px-1 py-1 text-[9px] text-gray-400 ${rowBackground}`}>
                         {storeIndex === 0 ? product.brand ?? '' : ''}
                       </td>
-                      <td title={product.name} className={`sticky left-20 z-10 max-w-40 overflow-hidden text-ellipsis whitespace-nowrap border border-gray-200 px-1 py-1 font-medium text-gray-700 ${rowBackground}`}>
+                      <td title={product.name} className={`sticky left-[56px] z-10 max-w-28 overflow-hidden text-ellipsis whitespace-nowrap border border-gray-200 px-1 py-1 font-medium text-gray-700 ${rowBackground}`}>
                         {storeIndex === 0 ? product.name : ''}
                       </td>
-                      <td className="border border-gray-200 bg-gray-50 px-1 py-1 text-center text-[10px] font-medium text-gray-500">{store.name}</td>
+                      <td className="sticky left-[168px] z-10 border border-gray-200 bg-gray-50 px-1 py-1 text-center text-[10px] font-medium text-gray-500">{store.name}</td>
+                      <td className={`sticky left-[208px] z-10 border border-gray-200 bg-yellow-50 px-0.5 py-1 text-center font-bold ${monthlyNet > 0 ? 'text-green-700' : monthlyNet < 0 ? 'text-red-600' : 'text-gray-300'}`}>
+                        {monthlyNet === 0 ? '−' : signedQuantity(monthlyNet)}
+                      </td>
+                      <td className={`sticky left-[244px] z-10 border border-gray-200 bg-blue-50 px-0.5 py-1 text-center font-bold ${usageTotal === 0 ? 'text-gray-300' : 'text-blue-700'}`}>{usageTotal === 0 ? '−' : usageTotal}</td>
+                      <td className={`sticky left-[280px] z-10 border border-gray-200 bg-green-50 px-0.5 py-1 text-center font-bold ${retailTotal === 0 ? 'text-gray-300' : 'text-green-700'}`}>{retailTotal === 0 ? '−' : retailTotal}</td>
+                      <td className={`sticky left-[316px] z-10 border border-gray-200 bg-amber-50 px-0.5 py-1 text-center font-bold ${personalTotal === 0 ? 'text-gray-300' : 'text-amber-700'}`}>{personalTotal === 0 ? '−' : personalTotal}</td>
                       {days.map((day) => {
                         const date = toDate(year, month, day)
                         const cellMovements = movementCellMap.get(`${store.id}_${product.id}_${date}`) ?? []
                         return <td key={day} className="border border-gray-200 p-0 text-center"><MovementCell movements={cellMovements} /></td>
                       })}
-                      <td className={`border border-gray-200 bg-yellow-50 px-1 py-1 text-center font-bold ${monthlyNet > 0 ? 'text-green-700' : monthlyNet < 0 ? 'text-red-600' : 'text-gray-300'}`}>
-                        {monthlyNet === 0 ? '−' : signedQuantity(monthlyNet)}
-                      </td>
                     </tr>
                   )
                 })
@@ -567,8 +584,15 @@ function HqOverview({ stores, categories }: { stores: Store[]; categories: Categ
                         <div className="text-[10px] text-gray-400">{item.product.brand}</div>
                         <div className="font-medium text-gray-700">{item.product.name}</div>
                       </td>
-                      {stores.map((store) => <td key={store.id} className="px-2 py-2 text-center font-medium text-gray-700">{stockByStore.get(store.id) ?? '−'}</td>)}
-                      <td className="bg-blue-50 px-3 py-2 text-center font-bold text-blue-700">{total}</td>
+                      {stores.map((store) => {
+                        const storeStock = stockByStore.get(store.id)
+                        return (
+                          <td key={store.id} className={`px-2 py-2 text-center font-medium ${storeStock !== undefined && storeStock < 0 ? 'text-red-600' : 'text-gray-700'}`}>
+                            {storeStock ?? '−'}
+                          </td>
+                        )
+                      })}
+                      <td className={`bg-blue-50 px-3 py-2 text-center font-bold ${total < 0 ? 'text-red-600' : 'text-blue-700'}`}>{total}</td>
                     </tr>
                   )
                   return rows
@@ -611,7 +635,7 @@ function HqOverview({ stores, categories }: { stores: Store[]; categories: Categ
                         return <td key={store.id} className="px-2 py-2 text-center font-medium text-gray-700">{used > 0 ? used : ''}</td>
                       })}
                       <td className="px-2 py-2 text-center font-medium text-emerald-700">{incoming > 0 ? incoming : ''}</td>
-                      <td className={`bg-blue-50 px-2 py-2 text-center font-bold ${baseRow && stock < baseRow.required_qty ? 'text-red-600' : 'text-blue-700'}`}>{stock}</td>
+                      <td className={`bg-blue-50 px-2 py-2 text-center font-bold ${stock < 0 || (baseRow && stock < baseRow.required_qty) ? 'text-red-600' : 'text-blue-700'}`}>{stock}</td>
                       <td className="px-3 py-2 text-center">
                         {baseRow && editRequiredKey === editKey ? (
                           <input type="number" min="0" value={editRequiredValue} onChange={(event) => setEditRequiredValue(event.target.value)}
@@ -663,7 +687,7 @@ function HqOverview({ stores, categories }: { stores: Store[]; categories: Categ
                   rows.push(
                     <tr key={editKey} className="border-t border-gray-100">
                       <td className="px-3 py-2"><div className="text-[10px] text-gray-400">{row.product.brand}</div><div className="font-medium text-gray-700">{row.product.name}</div></td>
-                      <td className={`px-2 py-2 text-center font-bold ${stock < row.required_qty ? 'text-red-600' : 'text-gray-700'}`}>{stock}</td>
+                      <td className={`px-2 py-2 text-center font-bold ${stock < 0 || stock < row.required_qty ? 'text-red-600' : 'text-gray-700'}`}>{stock}</td>
                       <td className="px-2 py-2 text-center">
                         {editRequiredKey === editKey ? (
                           <input type="number" min="0" value={editRequiredValue} onChange={(event) => setEditRequiredValue(event.target.value)}

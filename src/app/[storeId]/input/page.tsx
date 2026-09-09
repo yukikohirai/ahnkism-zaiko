@@ -5,7 +5,6 @@ import { getCurrentProfile, type UserProfile } from '@/lib/auth'
 import { supabase, type Store, type Category, type Product } from '@/lib/supabase'
 
 type ProductWithQty = Product & { qty: number }
-type RecentUsage = { product_id: number; date: string; quantity: number }
 type InventorySession = { id: string; store_id: number; entry_date: string; status: 'draft' | 'completed' }
 
 function today() {
@@ -29,7 +28,6 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
   const [draftLoaded, setDraftLoaded] = useState(false)
   const [draftQuantities, setDraftQuantities] = useState<Map<number, number>>(new Map())
   const [confirmedCategories, setConfirmedCategories] = useState<Set<number>>(new Set())
-  const [recentUsage, setRecentUsage] = useState<RecentUsage[]>([])
   const [search, setSearch] = useState('')
   const [date, setDate] = useState(today())
   const [saving, setSaving] = useState(false)
@@ -177,7 +175,6 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
             }] : []
           }) as ProductWithQty[]
           setProducts(availableProducts)
-          loadRecentUsage(availableProducts.map((p) => p.id))
         }
       })
   }, [activeCat, storeId, profile, session, draftLoaded])
@@ -185,20 +182,6 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
   async function handleLogout() {
     await supabase.auth.signOut()
     router.replace('/')
-  }
-
-  async function loadRecentUsage(productIds: number[]) {
-    const since = new Date()
-    since.setDate(since.getDate() - 60)
-    const { data } = await supabase
-      .from('usage_logs')
-      .select('product_id, date, quantity')
-      .eq('store_id', storeId)
-      .in('product_id', productIds)
-      .gte('date', since.toLocaleDateString('sv-SE'))
-      .gt('quantity', 0)
-      .order('date', { ascending: false })
-    if (data) setRecentUsage(data)
   }
 
   async function adjust(id: number, delta: number) {
@@ -280,34 +263,13 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
   const confirmedCategoryCount = categories.filter((category) => confirmedCategories.has(category.id)).length
   const summaryProducts = productCatalog.filter((product) => (draftQuantities.get(product.id) ?? 0) > 0)
   const hasInput = summaryProducts.length > 0
-  const usageRank = useMemo(() => {
-    const map = new Map<number, { count: number; lastDate: string }>()
-    recentUsage.forEach((usage) => {
-      const current = map.get(usage.product_id) ?? { count: 0, lastDate: '' }
-      map.set(usage.product_id, {
-        count: current.count + usage.quantity,
-        lastDate: current.lastDate > usage.date ? current.lastDate : usage.date,
-      })
-    })
-    return map
-  }, [recentUsage])
   const displayedProducts = useMemo(() => {
     const normalized = normalizeSearch(search)
-    return products
-      .filter((product) => {
-        if (!normalized) return true
-        return [product.name, product.brand ?? ''].some((value) => normalizeSearch(value).includes(normalized))
-      })
-      .sort((a, b) => {
-        const aRank = usageRank.get(a.id)
-        const bRank = usageRank.get(b.id)
-        if (!aRank && !bRank) return 0
-        if (!aRank) return 1
-        if (!bRank) return -1
-        if (aRank.lastDate !== bRank.lastDate) return bRank.lastDate.localeCompare(aRank.lastDate)
-        return bRank.count - aRank.count
-      })
-  }, [products, search, usageRank])
+    return products.filter((product) => {
+      if (!normalized) return true
+      return [product.name, product.brand ?? ''].some((value) => normalizeSearch(value).includes(normalized))
+    })
+  }, [products, search])
 
   if (!store) return <div className="flex items-center justify-center min-h-[100dvh] text-gray-400">読み込み中...</div>
 
@@ -367,9 +329,6 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
           <div className="mb-3 rounded-xl bg-green-50 px-4 py-3 text-center text-sm font-medium text-green-700">
             この入力は完了済みです。店舗からは修正できません。
           </div>
-        )}
-        {recentUsage.length > 0 && !search && (
-          <p className="mb-2 text-xs font-medium text-blue-600">最近入力した商品を上に表示しています</p>
         )}
         {products.length === 0 && (
           <p className="text-center text-gray-400 py-12">商品データがありません</p>
