@@ -1,6 +1,7 @@
 'use client'
 
 import Link from 'next/link'
+import PriceTable from './PriceTable'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { getCurrentProfile } from '@/lib/auth'
@@ -51,6 +52,7 @@ export default function ProductManagementPage() {
   const [editCategoryId, setEditCategoryId] = useState<number | null>(null)
   const [editNewCategory, setEditNewCategory] = useState('')
   const [editUsageOnly, setEditUsageOnly] = useState(false)
+  const [showPrices, setShowPrices] = useState(false)
   const [newCategory, setNewCategory] = useState('')
   const [sortStoreId, setSortStoreId] = useState<number | null>(null)
   const [sortCategoryId, setSortCategoryId] = useState<number | null>(null)
@@ -394,6 +396,11 @@ export default function ProductManagementPage() {
       <div className="mx-auto max-w-3xl p-4">
         {message && <p className="mb-3 rounded-xl bg-green-50 px-3 py-2 text-sm text-green-700">{message}</p>}
         {error && <p className="mb-3 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}
+
+        <button onClick={() => setShowPrices((value) => !value)} className="mb-3 w-full rounded-xl border border-emerald-300 bg-emerald-50 py-3 font-bold text-emerald-700">
+          {showPrices ? '価格の入力を閉じる' : '¥ 価格をまとめて入力'}
+        </button>
+        {showPrices && <PriceTable categories={categories} />}
 
         <button onClick={() => { setShowForm((value) => !value); setError(''); setMessage('') }} className="mb-3 w-full rounded-xl bg-blue-500 py-3 font-bold text-white">
           {showForm ? '追加フォームを閉じる' : '＋ 新しい商品を追加'}

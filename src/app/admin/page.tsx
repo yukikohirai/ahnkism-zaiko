@@ -903,6 +903,7 @@ export default function AdminPage() {
           <Link href="/" className="text-xs text-blue-500 shrink-0">← 入力</Link>
           <Link href="/admin/operations" className="rounded bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 shrink-0">入出庫</Link>
           <Link href="/admin/products" className="rounded bg-purple-50 px-2 py-1 text-xs font-medium text-purple-700 shrink-0">商品管理</Link>
+          <Link href="/admin/report" className="rounded bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 shrink-0">月次レポート</Link>
           <button
             disabled
             title="9月の運用開始までに月締め機能を反映します"
