@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { getCurrentProfile } from '@/lib/auth'
 import { supabase } from '@/lib/supabase'
+import { fetchAll } from '@/lib/fetchAll'
 import { withTax, withoutTax, yen } from '@/lib/tax'
 
 type Store = { id: number; name: string }
@@ -75,9 +76,10 @@ export default function ReportPage() {
     const [storeResult, productResult, movementResult, salesResult] = await Promise.all([
       supabase.from('stores').select('id, name').order('sort_order'),
       // 停止中の商品にも今月の履歴が残っていることがあるので全件取る
-      supabase.from('products').select('id, name, brand, cost_price, product_type, usage_only').limit(5000),
-      supabase.from('inventory_movements').select('store_id, product_id, quantity, movement_type')
-        .gte('occurred_on', from).lte('occurred_on', to).limit(20000),
+      fetchAll((start, end) => supabase.from('products').select('id, name, brand, cost_price, product_type, usage_only')
+        .order('id').range(start, end)),
+      fetchAll((start, end) => supabase.from('inventory_movements').select('store_id, product_id, quantity, movement_type')
+        .gte('occurred_on', from).lte('occurred_on', to).order('id').range(start, end)),
       supabase.from('monthly_sales').select('store_id, treatment_sales, retail_sales').eq('year_month', ym),
     ])
     if (storeResult.error || productResult.error || movementResult.error || salesResult.error) {

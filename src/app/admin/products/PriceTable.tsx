@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import { fetchAll } from '@/lib/fetchAll'
 import { withTax, withoutTax } from '@/lib/tax'
 
 type Category = { id: number; name: string }
@@ -31,11 +32,11 @@ export default function PriceTable({ categories }: { categories: Category[] }) {
 
   useEffect(() => {
     void (async () => {
-      const { data, error: loadError } = await supabase.from('products')
+      const { data, error: loadError } = await fetchAll((start, end) => supabase.from('products')
         .select('id, category_id, brand, name, cost_price, sale_price, product_type')
         .eq('is_active', true)
-        .order('sort_order')
-        .limit(5000)
+        .order('sort_order').order('id')
+        .range(start, end))
       if (loadError) setError('商品を読み込めませんでした。')
       setProducts((data ?? []) as PriceProduct[])
     })()

@@ -7,6 +7,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { getCurrentProfile } from '@/lib/auth'
 import { supabase } from '@/lib/supabase'
+import { fetchAll } from '@/lib/fetchAll'
 
 type Store = { id: number; name: string }
 type Category = { id: number; name: string }
@@ -85,8 +86,10 @@ export default function ProductManagementPage() {
     const [storeResult, categoryResult, productResult, assignmentResult] = await Promise.all([
       supabase.from('stores').select('id, name').order('sort_order'),
       supabase.from('categories').select('id, name').order('sort_order'),
-      supabase.from('products').select('id, category_id, dealer, manufacturer, brand, name, is_active, usage_only').order('sort_order'),
-      supabase.from('store_products').select('store_id, product_id, is_active').limit(5000),
+      fetchAll((start, end) => supabase.from('products').select('id, category_id, dealer, manufacturer, brand, name, is_active, usage_only')
+        .order('sort_order').order('id').range(start, end)),
+      fetchAll((start, end) => supabase.from('store_products').select('store_id, product_id, is_active')
+        .order('store_id').order('product_id').range(start, end)),
     ])
     const nextStores = (storeResult.data ?? []) as Store[]
     const nextCategories = (categoryResult.data ?? []) as Category[]

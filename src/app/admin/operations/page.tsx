@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { getCurrentProfile } from '@/lib/auth'
 import { supabase } from '@/lib/supabase'
+import { fetchAll } from '@/lib/fetchAll'
 
 type Mode = 'receipt' | 'transfer' | 'reduction' | 'adjustment'
 type Store = { id: number; name: string }
@@ -105,10 +106,12 @@ export default function OperationsPage() {
     const [storeResult, categoryResult, assignmentResult, stockResult] = await Promise.all([
       supabase.from('stores').select('id, name').order('sort_order'),
       supabase.from('categories').select('id, name').order('sort_order'),
-      supabase.from('store_products')
+      fetchAll((start, end) => supabase.from('store_products')
         .select('store_id, product_id, sort_order, products!inner(id, category_id, brand, name)')
-        .eq('is_active', true).eq('products.is_active', true).limit(5000),
-      supabase.from('current_store_stock').select('store_id, product_id, current_stock'),
+        .eq('is_active', true).eq('products.is_active', true)
+        .order('store_id').order('product_id').range(start, end)),
+      fetchAll((start, end) => supabase.from('current_store_stock').select('store_id, product_id, current_stock')
+        .order('store_id').order('product_id').range(start, end)),
     ])
     const nextStores = (storeResult.data ?? []) as Store[]
     setStores(nextStores)

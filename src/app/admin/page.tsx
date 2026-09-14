@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { getCurrentProfile } from '@/lib/auth'
 import { supabase } from '@/lib/supabase'
+import { fetchAll } from '@/lib/fetchAll'
 
 type Store = { id: number; name: string }
 type Category = { id: number; name: string; sort_order: number }
@@ -154,14 +155,17 @@ function InventoryHistoryTable({ stores, products, year, month, categories, sele
     const from = toDate(year, month, 1)
     const to = toDate(year, month, getDays(year, month).length)
     const [movementResult, assignmentResult] = await Promise.all([
-      supabase.from('inventory_movements')
+      fetchAll((start, end) => supabase.from('inventory_movements')
         .select('id, store_id, product_id, occurred_on, quantity, movement_type')
         .in('product_id', productIds)
         .gte('occurred_on', from)
         .lte('occurred_on', to)
         .order('occurred_on')
-        .order('created_at'),
-      supabase.from('store_products').select('store_id, product_id, sort_order').in('product_id', productIds),
+        .order('created_at')
+        .order('id')
+        .range(start, end)),
+      fetchAll((start, end) => supabase.from('store_products').select('store_id, product_id, sort_order').in('product_id', productIds)
+        .order('store_id').order('product_id').range(start, end)),
     ])
     if (movementResult.error || assignmentResult.error) {
       setError('月別履歴を読み込めませんでした。')
@@ -367,14 +371,16 @@ function HqOverview({ stores, categories }: { stores: Store[]; categories: Categ
       supabase.from('inventory_sessions')
         .select('id, store_id, entry_date, status, completed_at')
         .eq('entry_date', todayText),
-      supabase.from('store_products')
+      fetchAll((start, end) => supabase.from('store_products')
         .select('store_id, product_id, opening_stock, required_qty, sort_order, products!inner(id, category_id, brand, name, dealer, manufacturer, usage_only)')
         .eq('is_active', true)
-        .eq('products.is_active', true),
-      supabase.from('inventory_movements')
+        .eq('products.is_active', true)
+        .order('store_id').order('product_id')
+        .range(start, end)),
+      fetchAll((start, end) => supabase.from('inventory_movements')
         .select('store_id, product_id, quantity, occurred_on, movement_type')
-        .order('created_at')
-        .limit(20000),
+        .order('id')
+        .range(start, end)),
     ])
 
     const sessionRows = (sessionResult.data ?? []) as SessionSummary[]

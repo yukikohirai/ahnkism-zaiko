@@ -5,6 +5,7 @@ import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { getCurrentProfile } from '@/lib/auth'
 import { supabase } from '@/lib/supabase'
+import { fetchAll } from '@/lib/fetchAll'
 
 type Store = { id: number; name: string }
 type Category = { id: number; name: string; sort_order: number }
@@ -68,10 +69,12 @@ export default function OrdersPage() {
     const [storeResult, categoryResult, assignmentResult, movementResult, sortResult] = await Promise.all([
       supabase.from('stores').select('id, name').order('sort_order'),
       supabase.from('categories').select('id, name, sort_order').order('sort_order'),
-      supabase.from('store_products')
+      fetchAll((start, end) => supabase.from('store_products')
         .select('store_id, product_id, opening_stock, required_qty, sort_order, order_sort, products!inner(id, category_id, brand, name, dealer, manufacturer, usage_only)')
-        .eq('is_active', true).eq('products.is_active', true).limit(5000),
-      supabase.from('inventory_movements').select('store_id, product_id, quantity').limit(50000),
+        .eq('is_active', true).eq('products.is_active', true)
+        .order('store_id').order('product_id').range(start, end)),
+      fetchAll((start, end) => supabase.from('inventory_movements').select('store_id, product_id, quantity')
+        .order('id').range(start, end)),
       supabase.from('order_supplier_sort').select('store_id, supplier, sort_order'),
     ])
     if (storeResult.error || categoryResult.error || assignmentResult.error || movementResult.error || sortResult.error) setError('データを読み込めませんでした。')
