@@ -16,6 +16,7 @@ type Product = {
   brand: string | null
   name: string
   is_active: boolean
+  usage_only: boolean
 }
 
 type SortRow = { product_id: number; sort_order: number; name: string; brand: string | null }
@@ -49,6 +50,7 @@ export default function ProductManagementPage() {
   const [editName, setEditName] = useState('')
   const [editCategoryId, setEditCategoryId] = useState<number | null>(null)
   const [editNewCategory, setEditNewCategory] = useState('')
+  const [editUsageOnly, setEditUsageOnly] = useState(false)
   const [newCategory, setNewCategory] = useState('')
   const [sortStoreId, setSortStoreId] = useState<number | null>(null)
   const [sortCategoryId, setSortCategoryId] = useState<number | null>(null)
@@ -79,7 +81,7 @@ export default function ProductManagementPage() {
     const [storeResult, categoryResult, productResult, assignmentResult] = await Promise.all([
       supabase.from('stores').select('id, name').order('sort_order'),
       supabase.from('categories').select('id, name').order('sort_order'),
-      supabase.from('products').select('id, category_id, dealer, manufacturer, brand, name, is_active').order('sort_order'),
+      supabase.from('products').select('id, category_id, dealer, manufacturer, brand, name, is_active, usage_only').order('sort_order'),
       supabase.from('store_products').select('store_id, product_id, is_active').limit(5000),
     ])
     const nextStores = (storeResult.data ?? []) as Store[]
@@ -205,6 +207,7 @@ export default function ProductManagementPage() {
     setEditName(product.name)
     setEditCategoryId(product.category_id)
     setEditNewCategory('')
+    setEditUsageOnly(product.usage_only)
     setError('')
     setMessage('')
   }
@@ -234,6 +237,7 @@ export default function ProductManagementPage() {
       brand: editBrand.trim() || null,
       name: trimmedName,
       category_id: resolvedCategoryId,
+      usage_only: editUsageOnly,
     }
     const { error: updateError } = await supabase.from('products').update(patch).eq('id', product.id)
     setSaving(false)
@@ -480,6 +484,10 @@ export default function ProductManagementPage() {
                     {editCategoryId !== product.category_id && (
                       <p className="text-[11px] text-amber-600">カテゴリを変えると、店舗の入力画面では別のタブに移動します。</p>
                     )}
+                    <label className="flex items-start gap-2 rounded-xl bg-slate-50 px-3 py-2.5 text-sm text-gray-700">
+                      <input type="checkbox" checked={editUsageOnly} onChange={(event) => setEditUsageOnly(event.target.checked)} className="mt-0.5 h-4 w-4" />
+                      <span>発注しない商品<span className="block text-[11px] text-gray-400">本部の店舗別在庫で、在庫・必要数を出さず「今月の使用数」だけを一番下に表示します</span></span>
+                    </label>
                     <div className="flex gap-2 pt-1">
                       <button onClick={() => setEditingId(null)} className="flex-1 rounded-xl border border-gray-200 py-2.5 text-sm text-gray-600">やめる</button>
                       <button onClick={() => void saveEdit(product)} disabled={saving} className="flex-1 rounded-xl bg-blue-500 py-2.5 text-sm font-bold text-white disabled:opacity-50">{saving ? '保存中...' : '保存'}</button>
@@ -490,7 +498,7 @@ export default function ProductManagementPage() {
                     <div className="flex items-center justify-between gap-3">
                       <div className="min-w-0 flex-1">
                         <div className="text-[10px] text-gray-400">{product.dealer || 'ディーラー未設定'}／{product.manufacturer || 'メーカー未設定'}</div>
-                        <div className="text-xs text-gray-500">{product.brand}</div>
+                        <div className="text-xs text-gray-500">{product.brand}{product.usage_only && <span className="ml-1 rounded bg-slate-100 px-1 text-[10px] text-slate-600">発注しない</span>}</div>
                         <div className="font-medium leading-snug break-words text-gray-800">{product.name}</div>
                       </div>
                       <div className="flex shrink-0 flex-col gap-1.5">

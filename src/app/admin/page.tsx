@@ -15,9 +15,9 @@ type StoreProductSummary = {
   opening_stock: number
   required_qty: number
   sort_order: number
-  product: { id: number; category_id: number; brand: string | null; name: string; dealer: string | null; manufacturer: string | null }
+  product: { id: number; category_id: number; brand: string | null; name: string; dealer: string | null; manufacturer: string | null; usage_only: boolean }
 }
-type MovementSummary = { store_id: number; product_id: number; quantity: number }
+type MovementSummary = { store_id: number; product_id: number; quantity: number; occurred_on: string; movement_type: string }
 type StoreAssignment = { store_id: number; product_id: number; sort_order: number }
 type InventoryMovement = {
   id: string
@@ -368,11 +368,11 @@ function HqOverview({ stores, categories }: { stores: Store[]; categories: Categ
         .select('id, store_id, entry_date, status, completed_at')
         .eq('entry_date', todayText),
       supabase.from('store_products')
-        .select('store_id, product_id, opening_stock, required_qty, sort_order, products!inner(id, category_id, brand, name, dealer, manufacturer)')
+        .select('store_id, product_id, opening_stock, required_qty, sort_order, products!inner(id, category_id, brand, name, dealer, manufacturer, usage_only)')
         .eq('is_active', true)
         .eq('products.is_active', true),
       supabase.from('inventory_movements')
-        .select('store_id, product_id, quantity')
+        .select('store_id, product_id, quantity, occurred_on, movement_type')
         .order('created_at')
         .limit(20000),
     ])
@@ -419,6 +419,18 @@ function HqOverview({ stores, categories }: { stores: Store[]; categories: Categ
     return map
   }, [movements])
 
+  // 発注しない商品用：今月の使用・販売で減った数
+  const monthlyUsageMap = useMemo(() => {
+    const monthStart = `${todayText.slice(0, 7)}-01`
+    const map = new Map<string, number>()
+    movements.forEach((item) => {
+      if (item.occurred_on < monthStart || !['usage', 'retail_sale', 'personal_sale'].includes(item.movement_type)) return
+      const key = `${item.store_id}_${item.product_id}`
+      map.set(key, (map.get(key) ?? 0) - item.quantity)
+    })
+    return map
+  }, [movements, todayText])
+
   const currentStock = useCallback((row: StoreProductSummary) => (
     row.opening_stock + (movementMap.get(`${row.store_id}_${row.product_id}`) ?? 0)
   ), [movementMap])
@@ -450,7 +462,7 @@ function HqOverview({ stores, categories }: { stores: Store[]; categories: Categ
     sharedCategoryId !== null && row.product.category_id === sharedCategoryId
   ), [sharedCategoryId])
   const selectedStoreId = selectedView === 'retail' || selectedView === 'shared' ? null : Number(selectedView)
-  const storeRows = useMemo(() => {
+  const storeRowsAll = useMemo(() => {
     if (selectedStoreId === null) return []
     const filtered = assignments
       .filter((row) => row.store_id === selectedStoreId)
@@ -463,6 +475,8 @@ function HqOverview({ stores, categories }: { stores: Store[]; categories: Categ
       (row) => row.sort_order,
     )
   }, [assignments, isSharedRow, normalizedSearch, selectedStoreId])
+  const storeRows = useMemo(() => storeRowsAll.filter((row) => !row.product.usage_only), [storeRowsAll])
+  const usageOnlyRows = useMemo(() => storeRowsAll.filter((row) => row.product.usage_only), [storeRowsAll])
 
   const retailRows = useMemo(() => {
     const grouped = new Map<number, { product: StoreProductSummary['product']; rows: StoreProductSummary[] }>()
@@ -703,9 +717,26 @@ function HqOverview({ stores, categories }: { stores: Store[]; categories: Categ
                   )
                   return rows
                 })}
+                {usageOnlyRows.length > 0 && (
+                  <tr>
+                    <td colSpan={4} className="sticky top-8 z-10 bg-slate-600 px-3 py-2 text-sm font-bold text-white">発注しない商品（今月の使用数）</td>
+                  </tr>
+                )}
+                {usageOnlyRows.map((row) => {
+                  const used = monthlyUsageMap.get(`${row.store_id}_${row.product_id}`) ?? 0
+                  return (
+                    <tr key={`${row.store_id}_${row.product_id}_usage`} className="border-t border-gray-100">
+                      <td className="w-[320px] max-w-[320px] px-3 py-2"><div className="text-[10px] text-gray-400">{supplierName(row)}・{row.product.brand}</div><div className="break-words font-medium text-gray-700">{row.product.name}</div></td>
+                      <td colSpan={3} className="px-3 py-2 text-left text-sm">
+                        <span className="text-[10px] text-gray-400">今月使用 </span>
+                        <span className={`font-bold ${used > 0 ? 'text-slate-700' : 'text-gray-300'}`}>{used}</span>
+                      </td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
-            {storeRows.length === 0 && <p className="py-10 text-center text-sm text-gray-400">該当商品がありません</p>}
+            {storeRows.length === 0 && usageOnlyRows.length === 0 && <p className="py-10 text-center text-sm text-gray-400">該当商品がありません</p>}
           </div>
         )}
       </div>
