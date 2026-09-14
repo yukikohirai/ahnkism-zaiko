@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import PriceTable from './PriceTable'
+import MasterManager from './MasterManager'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { getCurrentProfile } from '@/lib/auth'
@@ -53,6 +54,7 @@ export default function ProductManagementPage() {
   const [editNewCategory, setEditNewCategory] = useState('')
   const [editUsageOnly, setEditUsageOnly] = useState(false)
   const [showPrices, setShowPrices] = useState(false)
+  const [showMasters, setShowMasters] = useState(false)
   const [newCategory, setNewCategory] = useState('')
   const [sortStoreId, setSortStoreId] = useState<number | null>(null)
   const [sortCategoryId, setSortCategoryId] = useState<number | null>(null)
@@ -401,6 +403,11 @@ export default function ProductManagementPage() {
           {showPrices ? '価格の入力を閉じる' : '¥ 価格をまとめて入力'}
         </button>
         {showPrices && <PriceTable categories={categories} />}
+
+        <button onClick={() => setShowMasters((value) => !value)} className="mb-3 w-full rounded-xl border border-slate-300 bg-slate-50 py-3 font-bold text-slate-700">
+          {showMasters ? '整理を閉じる' : '発注先・メーカー・ブランド・カテゴリを整理'}
+        </button>
+        {showMasters && <MasterManager products={products} categories={categories} onChanged={loadData} />}
 
         <button onClick={() => { setShowForm((value) => !value); setError(''); setMessage('') }} className="mb-3 w-full rounded-xl bg-blue-500 py-3 font-bold text-white">
           {showForm ? '追加フォームを閉じる' : '＋ 新しい商品を追加'}
