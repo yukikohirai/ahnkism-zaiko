@@ -108,6 +108,8 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
         .eq('store_id', Number(storeId))
         .eq('entry_date', today())
         .eq('status', 'completed')
+        .order('completed_at', { ascending: false })
+        .limit(1)
         .maybeSingle()
       openSession = completedToday.data
     }
@@ -259,6 +261,22 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
     if (nextCategory) setActiveCat(nextCategory.id)
   }
 
+  async function startNextReport() {
+    setSaving(true)
+    setSaveError('')
+    const { error } = await supabase
+      .from('inventory_sessions')
+      .insert({ store_id: Number(storeId), entry_date: today(), status: 'draft' })
+    setSaving(false)
+    // 既に下書きがある場合は insert が失敗するが、読み直せばその下書きが開く
+    if (error && error.code !== '23505') {
+      setSaveError('新しい報告を開始できませんでした。画面を再読み込みしてください。')
+      return
+    }
+    setSearch('')
+    await loadStoreAndDraft()
+  }
+
   async function handleComplete() {
     if (!session || !allCategoriesConfirmed || pendingWrites > 0) return
     setSaving(true)
@@ -342,7 +360,7 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
       <div className="px-4 pt-3">
         {completed && (
           <div className="mb-3 rounded-xl bg-green-50 px-4 py-3 text-center text-sm font-medium text-green-700">
-            この入力は完了済みです。店舗からは修正できません。
+            この報告は送信済みです。追加分は下の「続けて報告する」から送れます。
           </div>
         )}
         {searching && (
@@ -391,8 +409,14 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
       {/* 完了ボタン */}
       <div className="fixed bottom-0 left-0 right-0 z-20 border-t border-gray-200 bg-white p-4 pb-[calc(1rem+env(safe-area-inset-bottom))] shadow-[0_-4px_12px_rgba(0,0,0,0.06)] max-w-lg mx-auto">
         {completed ? (
-          <div className="w-full py-4 rounded-2xl bg-green-500 text-white text-center font-bold text-lg">
-            ✓ 入力を完了しました
+          <div className="space-y-2">
+            <div className="w-full py-3 rounded-2xl bg-green-500 text-white text-center font-bold text-lg">
+              ✓ 入力を完了しました
+            </div>
+            <button onClick={() => void startNextReport()} disabled={saving}
+              className="w-full rounded-2xl border border-blue-500 py-3 text-center font-bold text-blue-600 disabled:opacity-50">
+              {saving ? '準備中...' : '続けて報告する'}
+            </button>
           </div>
         ) : (
           <div>

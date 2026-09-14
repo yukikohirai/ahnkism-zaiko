@@ -416,17 +416,6 @@ function HqOverview({ stores, categories }: { stores: Store[]; categories: Categ
     return map
   }, [movements])
 
-  const movementSplit = useMemo(() => {
-    const outgoing = new Map<string, number>()
-    const incoming = new Map<string, number>()
-    movements.forEach((item) => {
-      const key = `${item.store_id}_${item.product_id}`
-      if (item.quantity < 0) outgoing.set(key, (outgoing.get(key) ?? 0) + item.quantity)
-      else incoming.set(key, (incoming.get(key) ?? 0) + item.quantity)
-    })
-    return { outgoing, incoming }
-  }, [movements])
-
   const currentStock = useCallback((row: StoreProductSummary) => (
     row.opening_stock + (movementMap.get(`${row.store_id}_${row.product_id}`) ?? 0)
   ), [movementMap])
@@ -629,45 +618,30 @@ function HqOverview({ stores, categories }: { stores: Store[]; categories: Categ
               <thead className="sticky top-0 z-20 bg-gray-50 text-gray-500">
                 <tr>
                   <th className="w-[320px] px-3 py-2 text-left">商品</th>
-                  <th className="w-16 px-2 py-2 text-center">繰越</th>
                   {stores.map((store) => <th key={store.id} className="w-16 px-2 py-2 text-center">{store.name}</th>)}
-                  <th className="w-16 px-2 py-2 text-center">入荷</th>
-                  <th className="w-16 px-2 py-2 text-center">現在庫</th>
-                  <th className="w-16 px-3 py-2 text-center">必要数</th>
+                  <th className="w-16 px-3 py-2 text-center">全店計</th>
                 </tr>
               </thead>
               <tbody>
                 {sharedRows.map((item) => {
-                  const sortedRows = [...item.rows].sort((a, b) => a.store_id - b.store_id)
-                  const baseRow = sortedRows.find((row) => row.store_id === stores[0]?.id) ?? sortedRows[0]
-                  const carryOver = baseRow?.opening_stock ?? 0
-                  const incoming = stores.reduce((sum, store) => sum + (movementSplit.incoming.get(`${store.id}_${item.product.id}`) ?? 0), 0)
-                  const totalMovement = item.rows.reduce((sum, row) => sum + (movementMap.get(`${row.store_id}_${row.product_id}`) ?? 0), 0)
-                  const stock = carryOver + totalMovement
-                  const editKey = baseRow ? `${baseRow.store_id}_${baseRow.product_id}` : `shared_${item.product.id}`
+                  // 繰越はLABO、入荷はeluの行に入っているため、店舗別は増減込みの値・合計が全店の実在庫
+                  const stockByStore = new Map(item.rows.map((row) => [row.store_id, currentStock(row)]))
+                  const total = Array.from(stockByStore.values()).reduce((sum, value) => sum + value, 0)
                   return (
                     <tr key={item.product.id} className="border-t border-gray-100">
                       <td className="w-[320px] max-w-[320px] px-3 py-2">
                         <div className="text-[10px] text-gray-400">{item.product.manufacturer}</div>
                         <div className="break-words font-medium text-gray-700">{item.product.name}</div>
                       </td>
-                      <td className="px-2 py-2 text-center text-gray-500">{carryOver}</td>
                       {stores.map((store) => {
-                        const used = -(movementSplit.outgoing.get(`${store.id}_${item.product.id}`) ?? 0)
-                        return <td key={store.id} className="px-2 py-2 text-center font-medium text-gray-700">{used > 0 ? used : ''}</td>
+                        const storeStock = stockByStore.get(store.id)
+                        return (
+                          <td key={store.id} className={`px-2 py-2 text-center font-medium ${storeStock !== undefined && storeStock < 0 ? 'text-red-600' : 'text-gray-700'}`}>
+                            {storeStock ?? '−'}
+                          </td>
+                        )
                       })}
-                      <td className="px-2 py-2 text-center font-medium text-emerald-700">{incoming > 0 ? incoming : ''}</td>
-                      <td className={`bg-blue-50 px-2 py-2 text-center font-bold ${stock < 0 || (baseRow && stock < baseRow.required_qty) ? 'text-red-600' : 'text-blue-700'}`}>{stock}</td>
-                      <td className="px-3 py-2 text-center">
-                        {baseRow && editRequiredKey === editKey ? (
-                          <input type="number" min="0" value={editRequiredValue} onChange={(event) => setEditRequiredValue(event.target.value)}
-                            onBlur={() => void saveStoreRequired(baseRow)} onKeyDown={(event) => event.key === 'Enter' && void saveStoreRequired(baseRow)}
-                            className="w-14 rounded border border-blue-300 px-1 py-1 text-center text-base outline-none" autoFocus />
-                        ) : (
-                          <button onClick={() => { if (!baseRow) return; setEditRequiredKey(editKey); setEditRequiredValue(String(baseRow.required_qty)) }}
-                            className="rounded bg-purple-50 px-3 py-1 font-bold text-purple-700">{baseRow?.required_qty ?? 0}</button>
-                        )}
-                      </td>
+                      <td className={`bg-blue-50 px-3 py-2 text-center font-bold ${total < 0 ? 'text-red-600' : 'text-blue-700'}`}>{total}</td>
                     </tr>
                   )
                 })}
