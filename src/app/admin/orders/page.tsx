@@ -21,6 +21,10 @@ type OrderRow = {
 type SupplierSort = { store_id: number; supplier: string; sort_order: number }
 
 const UNSET = '発注先未設定'
+
+function today() {
+  return new Date().toLocaleDateString('sv-SE')
+}
 const LAST = Number.MAX_SAFE_INTEGER
 
 function supplierOf(row: OrderRow) {
@@ -53,6 +57,9 @@ export default function OrdersPage() {
   const [draftProducts, setDraftProducts] = useState<Record<string, number[]>>({})
   const [dirty, setDirty] = useState(false)
   const [saving, setSaving] = useState(false)
+  const [receiptDate, setReceiptDate] = useState(today())
+  const [receiptQty, setReceiptQty] = useState<Record<number, string>>({})
+  const [receiving, setReceiving] = useState('')
 
   useEffect(() => {
     void (async () => {
@@ -180,6 +187,39 @@ export default function OrdersPage() {
     await load()
   }
 
+  // 発注リストからそのまま入荷を登録する（数量は書き換え可。不足数より多くてもよい）
+  async function registerReceipts(name: string, items: { row: OrderRow; order: number }[]) {
+    if (!storeId) return
+    const targets = items
+      .map((item) => ({ productId: item.row.product_id, qty: parseInt(receiptQty[item.row.product_id] ?? String(item.order), 10) }))
+      .filter((item) => Number.isFinite(item.qty) && item.qty > 0)
+    if (targets.length === 0) { setError('入荷数を入力してください。'); return }
+    if (!confirm(`${name}の入荷 ${targets.length}品目・計${targets.reduce((sum, item) => sum + item.qty, 0)}個を ${receiptDate} で登録します。よろしいですか？`)) return
+    setReceiving(name)
+    setError('')
+    setMessage('')
+    for (const target of targets) {
+      const { error: rpcError } = await supabase.rpc('record_inventory_operation', {
+        p_occurred_on: receiptDate,
+        p_store_id: storeId,
+        p_product_id: target.productId,
+        p_quantity: target.qty,
+        p_movement_type: 'purchase_order',
+        p_note: null,
+      })
+      if (rpcError) {
+        setReceiving('')
+        setError(`登録できませんでした：${rpcError.message}（ここまでの分は登録済みです）`)
+        await load()
+        return
+      }
+    }
+    setReceiving('')
+    setReceiptQty({})
+    setMessage(`${name}の入荷を登録しました（${targets.length}品目・計${targets.reduce((sum, item) => sum + item.qty, 0)}個）。`)
+    await load()
+  }
+
   const visibleSuppliers = supplierList.filter((name) => (supplier === 'all' || name === supplier) && (sorting || (supplierCounts.get(name) ?? 0) > 0))
 
   if (!authorized) return <div className="flex min-h-[100dvh] items-center justify-center text-gray-400">権限を確認しています...</div>
@@ -229,6 +269,14 @@ export default function OrdersPage() {
             <button onClick={startSorting} disabled={loading} className="shrink-0 rounded-lg bg-amber-50 px-3 py-1.5 text-xs font-bold text-amber-700">並び替え</button>
           )}
         </div>
+        {!sorting && (
+          <label className="flex items-center gap-2 rounded-xl border border-gray-200 bg-white px-3 py-2 text-xs text-gray-500">
+            入荷の日付
+            <input type="date" value={receiptDate} onChange={(event) => setReceiptDate(event.target.value)}
+              className="rounded-lg border border-gray-200 px-2 py-1.5 text-base text-gray-700" />
+            <span className="text-[11px] text-gray-400">各行の「入荷数」を直してから、発注先ごとにまとめて登録できます</span>
+          </label>
+        )}
         {sorting && <p className="rounded-xl bg-amber-50 px-3 py-2 text-xs text-amber-700">並び替え中です（{stores.find((store) => store.id === storeId)?.name}だけに反映）。発注先は見出しの ↑↓、商品は各行の ↑↓ で動かします。発注数0の商品も薄く表示しています。</p>}
         {message && <p className="rounded-xl bg-green-50 px-3 py-2 text-sm text-green-700">{message}</p>}
         {error && <p className="rounded-xl bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}
@@ -247,6 +295,12 @@ export default function OrdersPage() {
                 <h2 className="font-bold text-slate-800">{name}</h2>
                 <div className="flex items-center gap-2">
                   <span className="text-xs text-slate-500">{supplierCounts.get(name) ?? 0}品目・計{totalQty}個</span>
+                  {!sorting && (supplierCounts.get(name) ?? 0) > 0 && (
+                    <button onClick={() => void registerReceipts(name, shown)} disabled={receiving !== ''}
+                      className="rounded-lg bg-emerald-500 px-3 py-1.5 text-xs font-bold text-white disabled:opacity-40">
+                      {receiving === name ? '登録中...' : 'この入荷を登録'}
+                    </button>
+                  )}
                   {sorting && (
                     <>
                       <button onClick={() => { setDraftSuppliers((list) => move(list, supplierIndex, -1)); setDirty(true) }} disabled={supplierIndex === 0}
@@ -264,6 +318,7 @@ export default function OrdersPage() {
                     <th className="w-16 px-2 py-2 text-center">必要数</th>
                     <th className="w-16 px-2 py-2 text-center">現在庫</th>
                     <th className="w-20 px-3 py-2 text-center">発注数</th>
+                    {!sorting && <th className="w-24 px-2 py-2 text-center">入荷数</th>}
                     {sorting && <th className="w-20 px-2 py-2 text-center">順番</th>}
                   </tr>
                 </thead>
@@ -279,6 +334,13 @@ export default function OrdersPage() {
                         <td className="px-2 py-2 text-center text-gray-500">{row.required_qty}</td>
                         <td className={`px-2 py-2 text-center ${stock < 0 ? 'text-red-600' : 'text-gray-500'}`}>{stock}</td>
                         <td className={`px-3 py-2 text-center text-lg font-bold ${order > 0 ? 'bg-orange-50 text-orange-600' : 'text-gray-300'}`}>{order > 0 ? order : 0}</td>
+                        {!sorting && (
+                          <td className="px-2 py-2 text-center">
+                            <input inputMode="numeric" value={receiptQty[row.product_id] ?? String(order > 0 ? order : 0)}
+                              onChange={(event) => setReceiptQty((previous) => ({ ...previous, [row.product_id]: event.target.value }))}
+                              className="w-20 rounded-lg border border-gray-200 px-2 py-1.5 text-center text-base outline-none focus:border-emerald-400" />
+                          </td>
+                        )}
                         {sorting && (
                           <td className="px-2 py-2 text-center">
                             <div className="flex justify-center gap-1">
