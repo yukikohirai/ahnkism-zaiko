@@ -188,6 +188,7 @@ function InventoryHistoryTable({ stores, products, year, month, categories, sele
     })
     return map
   }, [movements])
+  // 「増減」列は非表示中（分かりにくいと店舗から要望）。戻すときにこの集計を使う
   const monthlyNetMap = useMemo(() => {
     const map = new Map<string, number>()
     movements.forEach((movement) => {
@@ -282,12 +283,11 @@ function InventoryHistoryTable({ stores, products, year, month, categories, sele
                 <th className="sticky left-0 z-30 w-14 min-w-14 border border-gray-200 bg-gray-100 px-1 py-1.5 text-left text-[10px]">ブランド</th>
                 <th className="sticky left-[56px] z-30 w-48 min-w-48 border border-gray-200 bg-gray-100 px-1 py-1.5 text-left">商品名</th>
                 <th className="sticky left-[248px] z-30 w-10 min-w-10 border border-gray-200 bg-gray-100 px-1 py-1.5 text-center text-[10px] text-gray-500">店舗</th>
-                <th className="sticky left-[288px] z-30 w-9 min-w-9 border border-gray-200 bg-yellow-50 px-0.5 py-1.5 text-center text-[10px] font-bold text-gray-600">増減</th>
-                <th className="sticky left-[324px] z-30 w-9 min-w-9 border border-gray-200 bg-emerald-50 px-0.5 py-1.5 text-center text-[10px] font-bold text-emerald-700">入荷</th>
-                <th className="sticky left-[360px] z-30 w-9 min-w-9 border border-gray-200 bg-blue-50 px-0.5 py-1.5 text-center text-[10px] font-bold text-blue-700">業務</th>
-                <th className="sticky left-[396px] z-30 w-9 min-w-9 border border-gray-200 bg-green-50 px-0.5 py-1.5 text-center text-[10px] font-bold text-green-700">店販</th>
-                <th className="sticky left-[432px] z-30 w-9 min-w-9 border border-gray-200 bg-amber-50 px-0.5 py-1.5 text-center text-[10px] font-bold text-amber-700">個人</th>
-                <th className="sticky left-[468px] z-30 w-9 min-w-9 border border-gray-200 bg-gray-200 px-0.5 py-1.5 text-center text-[10px] font-bold text-gray-700">誤差</th>
+                <th className="sticky left-[288px] z-30 w-9 min-w-9 border border-gray-200 bg-emerald-50 px-0.5 py-1.5 text-center text-[10px] font-bold text-emerald-700">入荷</th>
+                <th className="sticky left-[324px] z-30 w-9 min-w-9 border border-gray-200 bg-blue-50 px-0.5 py-1.5 text-center text-[10px] font-bold text-blue-700">業務</th>
+                <th className="sticky left-[360px] z-30 w-9 min-w-9 border border-gray-200 bg-green-50 px-0.5 py-1.5 text-center text-[10px] font-bold text-green-700">店販</th>
+                <th className="sticky left-[396px] z-30 w-9 min-w-9 border border-gray-200 bg-amber-50 px-0.5 py-1.5 text-center text-[10px] font-bold text-amber-700">個人</th>
+                <th className="sticky left-[432px] z-30 w-9 min-w-9 border border-gray-200 bg-gray-200 px-0.5 py-1.5 text-center text-[10px] font-bold text-gray-700">誤差</th>
                 {days.map((day) => {
                   const dayOfWeek = dow(year, month, day)
                   return (
@@ -304,7 +304,6 @@ function InventoryHistoryTable({ stores, products, year, month, categories, sele
                 const productStores = visibleStores.filter((store) => productStoreIds.has(store.id))
                 const rowBackground = productIndex % 2 === 0 ? 'bg-white' : 'bg-gray-50'
                 return productStores.map((store, storeIndex) => {
-                  const monthlyNet = monthlyNetMap.get(`${store.id}_${product.id}`) ?? 0
                   const incomingTotal = (monthlyTypeMap.get(`${store.id}_${product.id}_purchase_order`) ?? 0)
                     + (monthlyTypeMap.get(`${store.id}_${product.id}_transfer_in`) ?? 0)
                   const usageTotal = -(monthlyTypeMap.get(`${store.id}_${product.id}_usage`) ?? 0)
@@ -320,14 +319,11 @@ function InventoryHistoryTable({ stores, products, year, month, categories, sele
                         {storeIndex === 0 ? product.name : ''}
                       </td>
                       <td className="sticky left-[248px] z-10 border border-gray-200 bg-gray-50 px-1 py-1 text-center text-[10px] font-medium text-gray-500">{store.name}</td>
-                      <td className={`sticky left-[288px] z-10 border border-gray-200 bg-yellow-50 px-0.5 py-1 text-center font-bold ${monthlyNet > 0 ? 'text-green-700' : monthlyNet < 0 ? 'text-red-600' : 'text-gray-300'}`}>
-                        {monthlyNet === 0 ? '−' : signedQuantity(monthlyNet)}
-                      </td>
-                      <td className={`sticky left-[324px] z-10 border border-gray-200 bg-emerald-50 px-0.5 py-1 text-center font-bold ${incomingTotal === 0 ? 'text-gray-300' : 'text-emerald-700'}`}>{incomingTotal === 0 ? '−' : incomingTotal}</td>
-                      <td className={`sticky left-[360px] z-10 border border-gray-200 bg-blue-50 px-0.5 py-1 text-center font-bold ${usageTotal === 0 ? 'text-gray-300' : 'text-blue-700'}`}>{usageTotal === 0 ? '−' : usageTotal}</td>
-                      <td className={`sticky left-[396px] z-10 border border-gray-200 bg-green-50 px-0.5 py-1 text-center font-bold ${retailTotal === 0 ? 'text-gray-300' : 'text-green-700'}`}>{retailTotal === 0 ? '−' : retailTotal}</td>
-                      <td className={`sticky left-[432px] z-10 border border-gray-200 bg-amber-50 px-0.5 py-1 text-center font-bold ${personalTotal === 0 ? 'text-gray-300' : 'text-amber-700'}`}>{personalTotal === 0 ? '−' : personalTotal}</td>
-                      <td className={`sticky left-[468px] z-10 border border-gray-200 bg-gray-100 px-0.5 py-1 text-center font-bold ${adjustmentTotal === 0 ? 'text-gray-300' : adjustmentTotal > 0 ? 'text-green-700' : 'text-red-600'}`}>{adjustmentTotal === 0 ? '−' : signedQuantity(adjustmentTotal)}</td>
+                      <td className={`sticky left-[288px] z-10 border border-gray-200 bg-emerald-50 px-0.5 py-1 text-center font-bold ${incomingTotal === 0 ? 'text-gray-300' : 'text-emerald-700'}`}>{incomingTotal === 0 ? '−' : incomingTotal}</td>
+                      <td className={`sticky left-[324px] z-10 border border-gray-200 bg-blue-50 px-0.5 py-1 text-center font-bold ${usageTotal === 0 ? 'text-gray-300' : 'text-blue-700'}`}>{usageTotal === 0 ? '−' : usageTotal}</td>
+                      <td className={`sticky left-[360px] z-10 border border-gray-200 bg-green-50 px-0.5 py-1 text-center font-bold ${retailTotal === 0 ? 'text-gray-300' : 'text-green-700'}`}>{retailTotal === 0 ? '−' : retailTotal}</td>
+                      <td className={`sticky left-[396px] z-10 border border-gray-200 bg-amber-50 px-0.5 py-1 text-center font-bold ${personalTotal === 0 ? 'text-gray-300' : 'text-amber-700'}`}>{personalTotal === 0 ? '−' : personalTotal}</td>
+                      <td className={`sticky left-[432px] z-10 border border-gray-200 bg-gray-100 px-0.5 py-1 text-center font-bold ${adjustmentTotal === 0 ? 'text-gray-300' : adjustmentTotal > 0 ? 'text-green-700' : 'text-red-600'}`}>{adjustmentTotal === 0 ? '−' : signedQuantity(adjustmentTotal)}</td>
                       {days.map((day) => {
                         const date = toDate(year, month, day)
                         const cellMovements = movementCellMap.get(`${store.id}_${product.id}_${date}`) ?? []
