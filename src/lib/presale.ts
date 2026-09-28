@@ -9,6 +9,7 @@ export type PresaleCampaign = {
   reception_end: string | null
   delivery_month: string | null
   is_active: boolean
+  is_test?: boolean
 }
 
 export type PresaleItem = {

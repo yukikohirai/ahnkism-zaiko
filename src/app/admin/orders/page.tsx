@@ -103,7 +103,7 @@ export default function OrdersPage() {
     })
     setMovementMap(map)
 
-    const { data: activeCampaigns } = await supabase.from('presale_campaigns').select('id').eq('is_active', true)
+    const { data: activeCampaigns } = await supabase.from('presale_campaigns').select('id').eq('is_active', true).eq('is_test', false)
     const campaignIds = (activeCampaigns ?? []).map((row) => row.id as number)
     const held = new Map<string, number>()
     if (campaignIds.length > 0) {

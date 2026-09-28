@@ -39,7 +39,7 @@ export default function PresaleAdminPage() {
   const [campaigns, setCampaigns] = useState<PresaleCampaign[]>([])
   const [campaignId, setCampaignId] = useState<number | null>(null)
   const [showNew, setShowNew] = useState(false)
-  const [form, setForm] = useState({ name: '', reception_start: '', reception_end: '', delivery_month: '' })
+  const [form, setForm] = useState({ name: '', reception_start: '', reception_end: '', delivery_month: '', is_test: false })
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
 
@@ -78,10 +78,11 @@ export default function PresaleAdminPage() {
       reception_end: form.reception_end || null,
       delivery_month: form.delivery_month.trim() || null,
       is_active: true,
+      is_test: form.is_test,
     }).select('id').single()
     if (insertError || !data) { setError(insertError?.message ?? '作成できませんでした。'); return }
     setShowNew(false)
-    setForm({ name: '', reception_start: '', reception_end: '', delivery_month: '' })
+    setForm({ name: '', reception_start: '', reception_end: '', delivery_month: '', is_test: false })
     setCampaignId(data.id)
     setMessage('企画を作成しました。次に「対象商品と割引」で商品を選んでください。')
     await loadCampaigns()
@@ -111,7 +112,7 @@ export default function PresaleAdminPage() {
             <select value={campaignId ?? ''} onChange={(event) => setCampaignId(Number(event.target.value))}
               className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-base font-bold">
               {campaigns.length === 0 && <option value="">企画がありません</option>}
-              {campaigns.map((item) => <option key={item.id} value={item.id}>{item.name}{item.is_active ? '（受付中）' : '（終了）'}</option>)}
+              {campaigns.map((item) => <option key={item.id} value={item.id}>{item.name}{item.is_test ? '【お試し】' : ''}{item.is_active ? '（受付中）' : '（終了）'}</option>)}
             </select>
             <button onClick={() => setShowNew((value) => !value)} className="rounded-xl bg-pink-50 px-3 py-2 text-sm font-bold text-pink-700">{showNew ? '閉じる' : '＋ 新しい企画'}</button>
             {campaign && (
@@ -127,8 +128,15 @@ export default function PresaleAdminPage() {
               <label className="block text-xs text-gray-500">受付開始<input type="date" value={form.reception_start} onChange={(event) => setForm({ ...form, reception_start: event.target.value })} className="mt-1 block w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-base" /></label>
               <label className="block text-xs text-gray-500">受付終了<input type="date" value={form.reception_end} onChange={(event) => setForm({ ...form, reception_end: event.target.value })} className="mt-1 block w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-base" /></label>
               <label className="block text-xs text-gray-500">お渡し月<input value={form.delivery_month} onChange={(event) => setForm({ ...form, delivery_month: event.target.value })} placeholder="例：12月" className="mt-1 block w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-base" /></label>
+              <label className="flex items-center gap-2 text-xs text-gray-600 sm:col-span-4">
+                <input type="checkbox" checked={form.is_test} onChange={(event) => setForm({ ...form, is_test: event.target.checked })} className="h-4 w-4" />
+                お試しの企画（お渡し済みにしても在庫を減らさず、先行分も発注リストに反映しない）
+              </label>
               <button onClick={() => void createCampaign()} className="rounded-lg bg-pink-500 py-2 text-sm font-bold text-white sm:col-span-4">企画を作る</button>
             </div>
+          )}
+          {campaign?.is_test && (
+            <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs font-bold text-amber-800">お試しの企画です。お渡し済みにしても在庫は減らず、先行分も発注リストに反映しません。</p>
           )}
           {campaign && (
             <p className="mt-2 text-xs text-gray-500">
