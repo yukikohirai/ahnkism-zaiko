@@ -47,6 +47,8 @@ export default function OrdersPage() {
   const [rows, setRows] = useState<OrderRow[]>([])
   const [supplierSorts, setSupplierSorts] = useState<SupplierSort[]>([])
   const [movementMap, setMovementMap] = useState<Map<string, number>>(new Map())
+  // 先行予約で確保中の数（先行分−お渡し済み）。受付中の企画だけ
+  const [presaleHeld, setPresaleHeld] = useState<Map<string, number>>(new Map())
   const [storeId, setStoreId] = useState<number | null>(null)
   const [supplier, setSupplier] = useState<string>('all')
   const [loading, setLoading] = useState(true)
@@ -100,6 +102,29 @@ export default function OrdersPage() {
       map.set(key, (map.get(key) ?? 0) + item.quantity)
     })
     setMovementMap(map)
+
+    const { data: activeCampaigns } = await supabase.from('presale_campaigns').select('id').eq('is_active', true)
+    const campaignIds = (activeCampaigns ?? []).map((row) => row.id as number)
+    const held = new Map<string, number>()
+    if (campaignIds.length > 0) {
+      const [allocationResult, deliveredResult] = await Promise.all([
+        supabase.from('presale_allocations').select('store_id, product_id, allocated_qty').in('campaign_id', campaignIds),
+        fetchAll((start, end) => supabase.from('presale_order_lines')
+          .select('product_id, quantity, presale_orders!inner(store_id, campaign_id, delivered_at, cancelled_at)')
+          .in('presale_orders.campaign_id', campaignIds).not('presale_orders.delivered_at', 'is', null)
+          .is('presale_orders.cancelled_at', null).order('id').range(start, end)),
+      ])
+      ;(allocationResult.data ?? []).forEach((row) => {
+        const key = `${row.store_id}_${row.product_id}`
+        held.set(key, (held.get(key) ?? 0) + row.allocated_qty)
+      })
+      ;(deliveredResult.data ?? []).forEach((row) => {
+        const order = Array.isArray(row.presale_orders) ? row.presale_orders[0] : row.presale_orders
+        const key = `${order.store_id}_${row.product_id}`
+        held.set(key, (held.get(key) ?? 0) - row.quantity)
+      })
+    }
+    setPresaleHeld(held)
     setLoading(false)
   }, [authorized])
 
@@ -113,9 +138,11 @@ export default function OrdersPage() {
   const storeItems = useMemo(() => rows
     .filter((row) => row.store_id === storeId && !row.product.usage_only && !sharedCategoryIds.has(row.product.category_id))
     .map((row) => {
-      const stock = row.opening_stock + (movementMap.get(`${row.store_id}_${row.product_id}`) ?? 0)
-      return { row, stock, order: row.required_qty - stock }
-    }), [movementMap, rows, sharedCategoryIds, storeId])
+      // 先行予約で確保している分は通常販売に使えないので、在庫から除いて計算する
+      const held = Math.max(0, presaleHeld.get(`${row.store_id}_${row.product_id}`) ?? 0)
+      const stock = row.opening_stock + (movementMap.get(`${row.store_id}_${row.product_id}`) ?? 0) - held
+      return { row, stock, held, order: row.required_qty - stock }
+    }), [movementMap, presaleHeld, rows, sharedCategoryIds, storeId])
 
   // 保存済みの並び順（未設定は後ろ、発注先はあいうえお順・商品はカテゴリ順→入力画面の順）
   const savedSuppliers = useMemo(() => {
@@ -259,7 +286,7 @@ export default function OrdersPage() {
         </div>
 
         <div className="flex items-center justify-between gap-2">
-          <p className="text-[11px] text-gray-400">「発注しない商品」と「全店在庫」は含めていません</p>
+          <p className="text-[11px] text-gray-400">「発注しない商品」と「全店在庫」は含めていません。先行予約で確保中の分は現在庫から除いています</p>
           {sorting ? (
             <div className="flex shrink-0 gap-2">
               <button onClick={cancelSorting} className="rounded-lg border border-gray-200 bg-white px-3 py-1.5 text-xs text-gray-600">やめる</button>

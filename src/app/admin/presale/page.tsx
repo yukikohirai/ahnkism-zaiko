@@ -10,16 +10,21 @@ import { withoutTax, yen } from '@/lib/tax'
 import ReservationPanel from '@/components/presale/ReservationPanel'
 import {
   discountedPrice, regularPriceWithTax,
-  type DiscountType, type PresaleCampaign, type PresaleItem, type Reservation, type Staff,
+  type BulkTier, type DiscountType, type PresaleCampaign, type PresaleItem, type Staff, type StaffGoal,
 } from '@/lib/presale'
 
 type Store = { id: number; name: string }
 type Category = { id: number; name: string; sort_order: number }
 type RetailProduct = { id: number; category_id: number; brand: string | null; name: string; sale_price: number | null }
 type Assignment = { store_id: number; product_id: number; sort_order: number }
-type Tab = 'items' | 'reservations' | 'stock' | 'staff'
+type Tab = 'items' | 'reservations' | 'stock' | 'staff' | 'access'
 
-const TABS: [Tab, string][] = [['items', '対象商品と割引'], ['reservations', '予約一覧'], ['stock', '集計・先行分の在庫'], ['staff', 'スタッフ名簿']]
+const TABS: [Tab, string][] = [['items', '対象商品と割引'], ['reservations', '予約一覧'], ['stock', '集計・先行分の在庫'], ['staff', 'スタッフ名簿と目標'], ['access', '店舗の予約ページ']]
+
+// 美容機器はまとめ買いの個数に数えない（初期値。木村さんが商品ごとに変えられる）
+function looksLikeDevice(name: string) {
+  return /^(ReFa|ドライヤー|パワーストレート)/.test(name)
+}
 
 function normalize(value: string) {
   return value.normalize('NFKC').toLocaleLowerCase().replace(/\s+/g, '')
@@ -110,7 +115,7 @@ export default function PresaleAdminPage() {
             </select>
             <button onClick={() => setShowNew((value) => !value)} className="rounded-xl bg-pink-50 px-3 py-2 text-sm font-bold text-pink-700">{showNew ? '閉じる' : '＋ 新しい企画'}</button>
             {campaign && (
-              <button onClick={() => { if (confirm(campaign.is_active ? '受付を終了します。店舗の画面から先行予約のボタンが消えます。よろしいですか？' : 'この企画を再開します。店舗の画面に先行予約のボタンが出ます。よろしいですか？')) void updateCampaign({ is_active: !campaign.is_active }) }}
+              <button onClick={() => { if (confirm(campaign.is_active ? '受付を終了します。店舗の予約ページからこの企画が消えます。よろしいですか？' : 'この企画を再開します。店舗の予約ページに出ます。よろしいですか？')) void updateCampaign({ is_active: !campaign.is_active }) }}
                 className={`ml-auto rounded-xl px-3 py-2 text-sm font-bold ${campaign.is_active ? 'bg-gray-100 text-gray-600' : 'bg-green-50 text-green-700'}`}>
                 {campaign.is_active ? '受付を終了する' : '再開する'}
               </button>
@@ -128,7 +133,7 @@ export default function PresaleAdminPage() {
           {campaign && (
             <p className="mt-2 text-xs text-gray-500">
               受付 {campaign.reception_start ?? '未設定'} 〜 {campaign.reception_end ?? '未設定'}・お渡し {campaign.delivery_month ?? '未設定'}
-              {campaign.is_active ? '・店舗の入力画面に「先行予約」ボタンが出ています' : '・受付終了（店舗の画面には出ていません）'}
+              {campaign.is_active ? '・店舗の予約ページで受付中' : '・受付終了（店舗の予約ページには出ていません）'}
             </p>
           )}
           {message && <p className="mt-2 rounded-lg bg-green-50 px-3 py-2 text-sm text-green-700">{message}</p>}
@@ -142,10 +147,11 @@ export default function PresaleAdminPage() {
           ))}
         </div>
 
-        {tab === 'staff' && <StaffRoster stores={stores} />}
-        {tab !== 'staff' && !campaign && <p className="rounded-2xl bg-white py-12 text-center text-sm text-gray-400">まず「＋ 新しい企画」で企画を作ってください</p>}
+        {tab === 'staff' && <StaffRoster stores={stores} campaign={campaign} />}
+        {tab === 'access' && <StoreAccess stores={stores} />}
+        {(tab === 'items' || tab === 'reservations' || tab === 'stock') && !campaign && <p className="rounded-2xl bg-white py-12 text-center text-sm text-gray-400">まず「＋ 新しい企画」で企画を作ってください</p>}
         {tab === 'items' && campaign && <ItemSettings key={campaign.id} campaign={campaign} categories={categories} stores={stores} />}
-        {tab === 'reservations' && campaign && <ReservationPanel key={campaign.id} campaign={campaign} storeId={null} stores={stores} />}
+        {tab === 'reservations' && campaign && <ReservationPanel key={campaign.id} campaign={campaign} storeId={null} stores={stores} access={null} />}
         {tab === 'stock' && campaign && <StockSummary key={campaign.id} campaign={campaign} stores={stores} />}
       </div>
     </main>
@@ -158,6 +164,8 @@ function ItemSettings({ campaign, categories, stores }: { campaign: PresaleCampa
   const [assignments, setAssignments] = useState<Assignment[]>([])
   const [items, setItems] = useState<Map<number, PresaleItem>>(new Map())
   const [reservedIds, setReservedIds] = useState<Set<number>>(new Set())
+  const [tiers, setTiers] = useState<BulkTier[]>([])
+  const [tierDraft, setTierDraft] = useState({ min_qty: '', percent: '' })
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [search, setSearch] = useState('')
   const [onlyTargets, setOnlyTargets] = useState(false)
@@ -171,8 +179,11 @@ function ItemSettings({ campaign, categories, stores }: { campaign: PresaleCampa
       fetchAll((start, end) => supabase.from('store_products').select('store_id, product_id, sort_order')
         .eq('is_active', true).order('store_id').order('product_id').range(start, end)),
       supabase.from('presale_items').select('*').eq('campaign_id', campaign.id),
-      supabase.from('presale_reservations').select('product_id').eq('campaign_id', campaign.id).is('cancelled_at', null),
+      supabase.from('presale_order_lines').select('product_id, presale_orders!inner(campaign_id, cancelled_at)')
+        .eq('presale_orders.campaign_id', campaign.id).is('presale_orders.cancelled_at', null),
     ])
+    const tierResult = await supabase.from('presale_bulk_tiers').select('*').eq('campaign_id', campaign.id).order('min_qty')
+    setTiers((tierResult.data ?? []) as BulkTier[])
     if (productResult.error || assignmentResult.error || itemResult.error) setError('データを読み込めませんでした。')
     setProducts((productResult.data ?? []) as RetailProduct[])
     setAssignments((assignmentResult.data ?? []) as Assignment[])
@@ -217,14 +228,33 @@ function ItemSettings({ campaign, categories, stores }: { campaign: PresaleCampa
       const { error: deleteError } = await supabase.from('presale_items').delete().eq('campaign_id', campaign.id).eq('product_id', product.id)
       if (deleteError) setError(deleteError.message)
     } else {
-      const { error: insertError } = await supabase.from('presale_items').insert({ campaign_id: campaign.id, product_id: product.id, discount_type: 'percent', discount_value: 0 })
+      const { error: insertError } = await supabase.from('presale_items').insert({ campaign_id: campaign.id, product_id: product.id, discount_type: 'percent', discount_value: 0, bulk_excluded: looksLikeDevice(product.name) })
       if (insertError) setError(insertError.message)
     }
     setBusy('')
     await load()
   }
 
-  async function saveDiscount(product: RetailProduct, patch: Partial<Pick<PresaleItem, 'discount_type' | 'discount_value'>>) {
+  async function addTier() {
+    const minQty = parseInt(tierDraft.min_qty, 10)
+    const percent = Number(tierDraft.percent)
+    if (!Number.isFinite(minQty) || minQty < 2) { setError('まとめ買いの個数は2以上で入れてください。'); return }
+    if (!Number.isFinite(percent) || percent < 0 || percent > 100) { setError('％は0〜100で入れてください。'); return }
+    setError('')
+    const { error: saveError } = await supabase.from('presale_bulk_tiers').upsert({ campaign_id: campaign.id, min_qty: minQty, percent }, { onConflict: 'campaign_id,min_qty' })
+    if (saveError) { setError(saveError.message); return }
+    setTierDraft({ min_qty: '', percent: '' })
+    await load()
+  }
+
+  async function removeTier(minQty: number) {
+    if (!confirm(`「${minQty}個以上」の段階を削除します。よろしいですか？（登録済みの予約の金額は、次に修正したときに計算し直されます）`)) return
+    const { error: deleteError } = await supabase.from('presale_bulk_tiers').delete().eq('campaign_id', campaign.id).eq('min_qty', minQty)
+    if (deleteError) { setError(deleteError.message); return }
+    await load()
+  }
+
+  async function saveDiscount(product: RetailProduct, patch: Partial<Pick<PresaleItem, 'discount_type' | 'discount_value' | 'bulk_excluded'>>) {
     const item = items.get(product.id)
     if (!item) return
     setBusy(`d_${product.id}`)
@@ -264,6 +294,26 @@ function ItemSettings({ campaign, categories, stores }: { campaign: PresaleCampa
 
   return (
     <section className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+      <div className="mb-4 rounded-xl border border-pink-100 bg-pink-50/40 p-3">
+        <div className="mb-2 text-sm font-bold text-pink-800">まとめ買い割引（お客様1人の合計個数。美容機器は数えない）</div>
+        <div className="mb-2 flex flex-wrap gap-2">
+          {tiers.map((tier) => (
+            <span key={tier.min_qty} className="flex items-center gap-1 rounded-full bg-white px-3 py-1 text-sm shadow-sm">
+              {tier.min_qty}個以上 → <b className="text-pink-700">{Number(tier.percent)}%オフ</b>
+              <button onClick={() => void removeTier(tier.min_qty)} className="ml-1 text-gray-400" aria-label="削除">×</button>
+            </span>
+          ))}
+          {tiers.length === 0 && <span className="text-xs text-gray-500">まだ設定がありません</span>}
+        </div>
+        <div className="flex flex-wrap items-center gap-2 text-sm">
+          <input inputMode="numeric" value={tierDraft.min_qty} onChange={(event) => setTierDraft({ ...tierDraft, min_qty: event.target.value })} placeholder="3"
+            className="w-16 rounded-lg border border-gray-200 px-2 py-1.5 text-center text-base" />個以上で
+          <input inputMode="decimal" value={tierDraft.percent} onChange={(event) => setTierDraft({ ...tierDraft, percent: event.target.value })} placeholder="20"
+            className="w-16 rounded-lg border border-gray-200 px-2 py-1.5 text-center text-base" />%オフ
+          <button onClick={() => void addTier()} className="rounded-lg bg-pink-500 px-3 py-1.5 font-bold text-white">追加・変更</button>
+        </div>
+        <p className="mt-2 text-[11px] text-gray-500">個数に届いた予約は、対象商品が全部この％に置き換わります（商品ごとの割引より優先）。同じ個数で入れ直すと％だけ変わります。</p>
+      </div>
       <p className="mb-2 text-xs text-gray-500">対象にしたい商品にチェックして、割引を入れます。割引は<b>税込価格</b>に対して計算し、1円未満は四捨五入します。販売価格（税込）はここで入れた値が価格表にも反映されます。</p>
       <div className="mb-3 grid gap-2 sm:grid-cols-2">
         <input type="search" value={search} onChange={(event) => setSearch(event.target.value)} placeholder="商品名・ブランドで検索"
@@ -275,7 +325,7 @@ function ItemSettings({ campaign, categories, stores }: { campaign: PresaleCampa
       </div>
       {error && <p className="mb-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}
       <div className="max-h-[65vh] overflow-auto rounded-xl border border-gray-100">
-        <table className="w-full min-w-[760px] text-xs">
+        <table className="w-full min-w-[860px] text-xs">
           <thead className="sticky top-0 z-10 bg-gray-50 text-gray-500">
             <tr>
               <th className="w-12 px-2 py-2 text-center">対象</th>
@@ -283,6 +333,7 @@ function ItemSettings({ campaign, categories, stores }: { campaign: PresaleCampa
               <th className="w-28 px-2 py-2 text-center">販売価格（税込）</th>
               <th className="w-44 px-2 py-2 text-center">割引</th>
               <th className="w-28 px-2 py-2 text-center">割引後（税込）</th>
+              <th className="w-20 px-2 py-2 text-center">まとめ買い対象外</th>
             </tr>
           </thead>
           <tbody>
@@ -293,7 +344,7 @@ function ItemSettings({ campaign, categories, stores }: { campaign: PresaleCampa
               return (
                 <Fragment key={product.id}>
                   {product.category_id !== visible[index - 1]?.category_id && (
-                    <tr><td colSpan={5} className="sticky top-8 z-[5] bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-600">{categoryName.get(product.category_id)}</td></tr>
+                    <tr><td colSpan={6} className="sticky top-8 z-[5] bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-600">{categoryName.get(product.category_id)}</td></tr>
                   )}
                   <tr className={`border-t border-gray-100 ${item ? 'bg-pink-50/40' : ''}`}>
                     <td className="px-2 py-1.5 text-center">
@@ -327,6 +378,12 @@ function ItemSettings({ campaign, categories, stores }: { campaign: PresaleCampa
                       ) : <span className="block text-center text-gray-300">−</span>}
                     </td>
                     <td className={`px-2 py-1.5 text-right text-sm font-bold ${item ? 'text-pink-700' : 'text-gray-300'}`}>{item ? yen(after) : '−'}</td>
+                    <td className="px-2 py-1.5 text-center">
+                      {item ? (
+                        <input type="checkbox" checked={item.bulk_excluded} title="美容機器など、まとめ買いの個数に数えない商品"
+                          onChange={(event) => void saveDiscount(product, { bulk_excluded: event.target.checked })} className="h-4 w-4" />
+                      ) : <span className="text-gray-300">−</span>}
+                    </td>
                   </tr>
                 </Fragment>
               )
@@ -342,25 +399,30 @@ function ItemSettings({ campaign, categories, stores }: { campaign: PresaleCampa
 // 集計と先行分の在庫。先行分の残り＝先行分として確保した数−お渡し済み、通常在庫＝今の在庫−先行分の残り
 function StockSummary({ campaign, stores }: { campaign: PresaleCampaign; stores: Store[] }) {
   const [items, setItems] = useState<{ product_id: number; brand: string | null; name: string }[]>([])
-  const [reservations, setReservations] = useState<Reservation[]>([])
+  const [lines, setLines] = useState<{ store_id: number; product_id: number; quantity: number; delivered: boolean }[]>([])
   const [allocations, setAllocations] = useState<Map<string, number>>(new Map())
   const [stock, setStock] = useState<Map<string, number>>(new Map())
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [error, setError] = useState('')
 
   const load = useCallback(async () => {
-    const [itemResult, reservationResult, allocationResult, stockResult] = await Promise.all([
+    const [itemResult, lineResult, allocationResult, stockResult] = await Promise.all([
       supabase.from('presale_items').select('product_id, product:products!inner(brand, name)').eq('campaign_id', campaign.id),
-      fetchAll((start, end) => supabase.from('presale_reservations').select('*').eq('campaign_id', campaign.id).order('id').range(start, end)),
+      fetchAll((start, end) => supabase.from('presale_order_lines')
+        .select('product_id, quantity, presale_orders!inner(store_id, campaign_id, cancelled_at, delivered_at)')
+        .eq('presale_orders.campaign_id', campaign.id).is('presale_orders.cancelled_at', null).order('id').range(start, end)),
       supabase.from('presale_allocations').select('store_id, product_id, allocated_qty').eq('campaign_id', campaign.id),
       fetchAll((start, end) => supabase.from('current_store_stock').select('store_id, product_id, current_stock').order('store_id').order('product_id').range(start, end)),
     ])
-    if (itemResult.error || reservationResult.error || allocationResult.error || stockResult.error) setError('データを読み込めませんでした。')
+    if (itemResult.error || lineResult.error || allocationResult.error || stockResult.error) setError('データを読み込めませんでした。')
     setItems((itemResult.data ?? []).map((row) => {
-      const product = Array.isArray(row.product) ? row.product[0] : row.product
-      return { product_id: row.product_id as number, brand: (product as { brand: string | null }).brand, name: (product as { name: string }).name }
+      const product = (Array.isArray(row.product) ? row.product[0] : row.product) as { brand: string | null; name: string }
+      return { product_id: row.product_id as number, brand: product.brand, name: product.name }
     }).sort((a, b) => `${a.brand ?? ''}${a.name}`.localeCompare(`${b.brand ?? ''}${b.name}`, 'ja')))
-    setReservations((reservationResult.data ?? []) as Reservation[])
+    setLines((lineResult.data ?? []).map((row) => {
+      const order = Array.isArray(row.presale_orders) ? row.presale_orders[0] : row.presale_orders
+      return { store_id: order.store_id, product_id: row.product_id, quantity: row.quantity, delivered: !!order.delivered_at }
+    }))
     setAllocations(new Map((allocationResult.data ?? []).map((row) => [`${row.store_id}_${row.product_id}`, row.allocated_qty as number])))
     setStock(new Map(((stockResult.data ?? []) as { store_id: number; product_id: number; current_stock: number }[]).map((row) => [`${row.store_id}_${row.product_id}`, row.current_stock])))
   }, [campaign.id])
@@ -369,15 +431,15 @@ function StockSummary({ campaign, stores }: { campaign: PresaleCampaign; stores:
 
   const reservedMap = useMemo(() => {
     const map = new Map<string, { reserved: number; delivered: number }>()
-    reservations.filter((row) => !row.cancelled_at).forEach((row) => {
-      const key = `${row.store_id}_${row.product_id}`
+    lines.forEach((line) => {
+      const key = `${line.store_id}_${line.product_id}`
       const current = map.get(key) ?? { reserved: 0, delivered: 0 }
-      current.reserved += row.quantity
-      if (row.delivered_at) current.delivered += row.quantity
+      current.reserved += line.quantity
+      if (line.delivered) current.delivered += line.quantity
       map.set(key, current)
     })
     return map
-  }, [reservations])
+  }, [lines])
 
   async function saveAllocation(storeId: number, productId: number) {
     const key = `${storeId}_${productId}`
@@ -396,7 +458,7 @@ function StockSummary({ campaign, stores }: { campaign: PresaleCampaign; stores:
   return (
     <section className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
       <p className="mb-1 text-xs text-gray-500">入荷したあとで、各店舗の<b>「先行分」</b>に先行予約用として確保した数を入れてください。お渡し済みにすると先行分の残りと在庫が自動で減ります。</p>
-      <p className="mb-3 text-[11px] text-gray-400">先行分の残り ＝ 先行分 − お渡し済み／通常在庫 ＝ 今の在庫 − 先行分の残り。予約合計は発注数の目安です。</p>
+      <p className="mb-3 text-[11px] text-gray-400">先行分の残り ＝ 先行分 − お渡し済み／通常在庫 ＝ 今の在庫 − 先行分の残り（発注リストもこの通常在庫で計算）。予約合計は発注数の目安です。</p>
       {error && <p className="mb-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}
       <div className="max-h-[70vh] overflow-auto rounded-xl border border-gray-100">
         <table className="w-max min-w-full text-xs">
@@ -461,18 +523,24 @@ function StockSummary({ campaign, stores }: { campaign: PresaleCampaign; stores:
   )
 }
 
-// スタッフ名簿（担当スタイリスト・登録スタッフの選択肢）
-function StaffRoster({ stores }: { stores: Store[] }) {
+// スタッフ名簿と、企画ごとの目標金額（税込）
+function StaffRoster({ stores, campaign }: { stores: Store[]; campaign: PresaleCampaign | undefined }) {
   const [staff, setStaff] = useState<Staff[]>([])
+  const [goals, setGoals] = useState<Map<number, number>>(new Map())
+  const [goalDrafts, setGoalDrafts] = useState<Record<number, string>>({})
   const [newNames, setNewNames] = useState<Record<number, string>>({})
   const [editing, setEditing] = useState<{ id: number; name: string } | null>(null)
   const [error, setError] = useState('')
 
   const load = useCallback(async () => {
-    const { data, error: loadError } = await supabase.from('staff').select('*').order('sort_order').order('id')
-    if (loadError) setError('名簿を読み込めませんでした。')
-    setStaff((data ?? []) as Staff[])
-  }, [])
+    const [staffResult, goalResult] = await Promise.all([
+      supabase.from('staff').select('*').order('sort_order').order('id'),
+      campaign ? supabase.from('presale_staff_goals').select('*').eq('campaign_id', campaign.id) : Promise.resolve({ data: [], error: null }),
+    ])
+    if (staffResult.error || goalResult.error) setError('名簿を読み込めませんでした。')
+    setStaff((staffResult.data ?? []) as Staff[])
+    setGoals(new Map(((goalResult.data ?? []) as StaffGoal[]).map((goal) => [goal.staff_id, goal.goal_amount])))
+  }, [campaign])
 
   useEffect(() => { void load() }, [load])
 
@@ -495,9 +563,26 @@ function StaffRoster({ stores }: { stores: Store[] }) {
     await load()
   }
 
+  async function saveGoal(staffId: number) {
+    if (!campaign) return
+    const raw = goalDrafts[staffId]
+    if (raw === undefined) return
+    const value = parseInt(raw.replace(/[,，¥円\s]/g, '') || '0', 10)
+    if (!Number.isFinite(value) || value < 0) { setError('目標は0以上の金額で入れてください。'); return }
+    setError('')
+    const { error: saveError } = await supabase.from('presale_staff_goals')
+      .upsert({ campaign_id: campaign.id, staff_id: staffId, goal_amount: value }, { onConflict: 'campaign_id,staff_id' })
+    if (saveError) { setError(saveError.message); return }
+    setGoals((previous) => new Map(previous).set(staffId, value))
+    setGoalDrafts((previous) => { const next = { ...previous }; delete next[staffId]; return next })
+  }
+
   return (
     <div className="space-y-3">
-      <p className="text-xs text-gray-500">先行予約の「担当スタイリスト」「登録したスタッフ」の選択肢です。辞めたスタッフは「外す」にすると選択肢から消えます（過去の予約の名前は残ります）。</p>
+      <p className="text-xs text-gray-500">
+        予約の「担当スタイリスト」「お勧めしたスタッフ」の選択肢です。辞めたスタッフは「外す」にすると選択肢から消えます（過去の予約の名前は残ります）。
+        {campaign ? `目標金額（税込）は「${campaign.name}」の分です。` : '目標金額は企画を作ると入れられます。'}
+      </p>
       {error && <p className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}
       <div className="grid gap-3 md:grid-cols-3">
         {stores.map((store) => (
@@ -511,21 +596,33 @@ function StaffRoster({ stores }: { stores: Store[] }) {
             </div>
             <div className="divide-y divide-gray-100">
               {staff.filter((person) => person.store_id === store.id).map((person) => (
-                <div key={person.id} className={`flex items-center justify-between gap-2 py-2 ${person.is_active ? '' : 'opacity-40'}`}>
-                  {editing?.id === person.id ? (
-                    <>
-                      <input value={editing.name} onChange={(event) => setEditing({ id: person.id, name: event.target.value })} autoFocus
-                        className="min-w-0 flex-1 rounded-lg border border-gray-200 px-2 py-1.5 text-base" />
-                      <button onClick={() => editing.name.trim() && void update(person.id, { name: editing.name.trim() })} className="rounded-lg bg-blue-500 px-2.5 py-1.5 text-xs font-bold text-white">保存</button>
-                    </>
-                  ) : (
-                    <>
-                      <span className="text-sm text-gray-800">{person.name}</span>
-                      <div className="flex shrink-0 gap-1">
-                        <button onClick={() => setEditing({ id: person.id, name: person.name })} className="rounded-lg bg-blue-50 px-2 py-1 text-xs text-blue-700">名前変更</button>
-                        <button onClick={() => void update(person.id, { is_active: !person.is_active })} className="rounded-lg bg-gray-100 px-2 py-1 text-xs text-gray-600">{person.is_active ? '外す' : '戻す'}</button>
-                      </div>
-                    </>
+                <div key={person.id} className={`py-2 ${person.is_active ? '' : 'opacity-40'}`}>
+                  <div className="flex items-center justify-between gap-2">
+                    {editing?.id === person.id ? (
+                      <>
+                        <input value={editing.name} onChange={(event) => setEditing({ id: person.id, name: event.target.value })} autoFocus
+                          className="min-w-0 flex-1 rounded-lg border border-gray-200 px-2 py-1.5 text-base" />
+                        <button onClick={() => editing.name.trim() && void update(person.id, { name: editing.name.trim() })} className="rounded-lg bg-blue-500 px-2.5 py-1.5 text-xs font-bold text-white">保存</button>
+                      </>
+                    ) : (
+                      <>
+                        <span className="text-sm text-gray-800">{person.name}</span>
+                        <div className="flex shrink-0 gap-1">
+                          <button onClick={() => setEditing({ id: person.id, name: person.name })} className="rounded-lg bg-blue-50 px-2 py-1 text-xs text-blue-700">名前変更</button>
+                          <button onClick={() => void update(person.id, { is_active: !person.is_active })} className="rounded-lg bg-gray-100 px-2 py-1 text-xs text-gray-600">{person.is_active ? '外す' : '戻す'}</button>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                  {campaign && person.is_active && (
+                    <label className="mt-1 flex items-center gap-2 text-xs text-gray-500">
+                      目標
+                      <input inputMode="numeric" value={goalDrafts[person.id] ?? (goals.get(person.id) ? String(goals.get(person.id)) : '')} placeholder="未設定"
+                        onChange={(event) => setGoalDrafts((previous) => ({ ...previous, [person.id]: event.target.value }))}
+                        onBlur={() => void saveGoal(person.id)} onKeyDown={(event) => { if (event.key === 'Enter') (event.target as HTMLInputElement).blur() }}
+                        className="w-28 rounded-lg border border-pink-200 px-2 py-1 text-right text-base" />
+                      円
+                    </label>
                   )}
                 </div>
               ))}
@@ -534,5 +631,86 @@ function StaffRoster({ stores }: { stores: Store[] }) {
         ))}
       </div>
     </div>
+  )
+}
+
+// 店舗スタッフ用の予約ページ（URL＋暗証番号）
+function StoreAccess({ stores }: { stores: Store[] }) {
+  const [rows, setRows] = useState<{ store_id: number; url_token: string; pin_hash: string | null }[]>([])
+  const [pins, setPins] = useState<Record<number, string>>({})
+  const [message, setMessage] = useState('')
+  const [error, setError] = useState('')
+  const origin = typeof window === 'undefined' ? '' : window.location.origin
+
+  const load = useCallback(async () => {
+    const { data, error: loadError } = await supabase.from('presale_store_access').select('store_id, url_token, pin_hash')
+    if (loadError) setError('読み込めませんでした。')
+    setRows((data ?? []) as typeof rows)
+  }, [])
+
+  useEffect(() => { void load() }, [load])
+
+  async function savePin(storeId: number) {
+    const pin = (pins[storeId] ?? '').trim()
+    setError('')
+    setMessage('')
+    const { error: pinError } = await supabase.rpc('set_presale_pin', { p_store_id: storeId, p_pin: pin })
+    if (pinError) { setError(pinError.message); return }
+    setPins((previous) => ({ ...previous, [storeId]: '' }))
+    setMessage('暗証番号を設定しました。スタッフに伝えてください。')
+    await load()
+  }
+
+  async function resetUrl(storeId: number) {
+    if (!confirm('この店舗のページのURLを作り直します。今のURLは使えなくなり、新しいURLをスタッフに伝え直す必要があります。よろしいですか？')) return
+    const { error: resetError } = await supabase.rpc('reset_presale_url', { p_store_id: storeId })
+    if (resetError) { setError(resetError.message); return }
+    setMessage('URLを作り直しました。')
+    await load()
+  }
+
+  async function copy(text: string) {
+    try {
+      await navigator.clipboard.writeText(text)
+      setMessage('URLをコピーしました。')
+    } catch {
+      setError('コピーできませんでした。URLを長押し（右クリック）してコピーしてください。')
+    }
+  }
+
+  return (
+    <section className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+      <p className="mb-3 text-xs text-gray-500">
+        スタッフはこのURLを開いて暗証番号を入れると、<b>その店舗の先行予約だけ</b>を操作できます（在庫の画面には入れません）。
+        暗証番号は4〜8桁の数字。設定した番号はここには表示されないので、控えておいてください。
+      </p>
+      {message && <p className="mb-2 rounded-lg bg-green-50 px-3 py-2 text-sm text-green-700">{message}</p>}
+      {error && <p className="mb-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}
+      <div className="divide-y divide-gray-100">
+        {stores.map((store) => {
+          const row = rows.find((item) => item.store_id === store.id)
+          const url = row ? `${origin}/yoyaku/${row.url_token}` : ''
+          return (
+            <div key={store.id} className="py-3">
+              <div className="mb-1 flex items-center justify-between gap-2">
+                <span className="font-bold text-gray-800">{store.name}</span>
+                <span className={`text-xs ${row?.pin_hash ? 'text-green-700' : 'text-amber-600'}`}>{row?.pin_hash ? '暗証番号：設定済み' : '暗証番号：未設定（まだ入れません）'}</span>
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <code className="min-w-0 flex-1 break-all rounded-lg bg-gray-50 px-2 py-1.5 text-xs text-gray-700">{url}</code>
+                <button onClick={() => void copy(url)} className="shrink-0 rounded-lg bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-700">コピー</button>
+                <button onClick={() => void resetUrl(store.id)} className="shrink-0 rounded-lg bg-gray-100 px-3 py-1.5 text-xs text-gray-600">URLを作り直す</button>
+              </div>
+              <div className="mt-2 flex items-center gap-2 text-sm">
+                <input type="password" inputMode="numeric" autoComplete="new-password" value={pins[store.id] ?? ''} placeholder="新しい暗証番号"
+                  onChange={(event) => setPins((previous) => ({ ...previous, [store.id]: event.target.value }))}
+                  className="w-40 rounded-lg border border-gray-200 px-3 py-1.5 text-base" />
+                <button onClick={() => void savePin(store.id)} disabled={!(pins[store.id] ?? '').trim()} className="rounded-lg bg-pink-500 px-3 py-1.5 text-xs font-bold text-white disabled:opacity-40">設定する</button>
+              </div>
+            </div>
+          )
+        })}
+      </div>
+    </section>
   )
 }

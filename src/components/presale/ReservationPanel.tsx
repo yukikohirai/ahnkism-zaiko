@@ -5,38 +5,53 @@ import { supabase } from '@/lib/supabase'
 import { fetchAll } from '@/lib/fetchAll'
 import { yen } from '@/lib/tax'
 import {
-  discountedPrice, discountLabel, regularPriceWithTax, todayInTokyo,
-  type PresaleCampaign, type PresaleItem, type Reservation, type Staff,
+  discountLabel, priceOrder, regularPriceWithTax, todayInTokyo,
+  type BulkTier, type PortalAccess, type PresaleCampaign, type PresaleItemWithProduct, type PresaleOrder, type Staff, type StaffGoal,
 } from '@/lib/presale'
 
 type Store = { id: number; name: string }
-type ItemProduct = PresaleItem & { product: { id: number; brand: string | null; name: string; sale_price: number | null } }
-
+type DraftLine = { product_id: string; quantity: string }
 type Draft = {
+  id: string | null
   store_id: number | null
   reserved_on: string
   customer_name: string
   stylist_id: string
   staff_id: string
-  product_id: string
-  quantity: string
+  lines: DraftLine[]
 }
 
 function emptyDraft(storeId: number | null): Draft {
-  return { store_id: storeId, reserved_on: todayInTokyo(), customer_name: '', stylist_id: '', staff_id: '', product_id: '', quantity: '1' }
+  return { id: null, store_id: storeId, reserved_on: todayInTokyo(), customer_name: '', stylist_id: '', staff_id: '', lines: [{ product_id: '', quantity: '1' }] }
 }
 
 function normalize(value: string) {
   return value.normalize('NFKC').toLocaleLowerCase().replace(/\s+/g, '')
 }
 
-// 先行予約の入力と一覧。店舗画面（storeId 固定）と本部画面（全店）で共用する
-export default function ReservationPanel({ campaign, storeId, stores }: { campaign: PresaleCampaign; storeId: number | null; stores: Store[] }) {
-  const [items, setItems] = useState<ItemProduct[]>([])
+type PortalData = {
+  campaigns: PresaleCampaign[]
+  items: PresaleItemWithProduct[]
+  tiers: BulkTier[]
+  staff: Staff[]
+  goals: StaffGoal[]
+  orders: PresaleOrder[]
+}
+
+// 先行予約の入力・一覧・スタッフの目標と実績。
+// 本部画面（access = null、全店）と店舗の予約ページ（合言葉＋暗証番号、自店だけ）で共用する
+export default function ReservationPanel({ campaign, storeId, stores, access }: {
+  campaign: PresaleCampaign
+  storeId: number | null
+  stores: Store[]
+  access: PortalAccess
+}) {
+  const [items, setItems] = useState<PresaleItemWithProduct[]>([])
+  const [tiers, setTiers] = useState<BulkTier[]>([])
   const [staff, setStaff] = useState<Staff[]>([])
-  const [reservations, setReservations] = useState<Reservation[]>([])
+  const [goals, setGoals] = useState<StaffGoal[]>([])
+  const [orders, setOrders] = useState<PresaleOrder[]>([])
   const [draft, setDraft] = useState<Draft>(emptyDraft(storeId))
-  const [editingId, setEditingId] = useState<string | null>(null)
   const [filterStore, setFilterStore] = useState<number | 'all'>('all')
   const [search, setSearch] = useState('')
   const [onlyOpen, setOnlyOpen] = useState(false)
@@ -46,147 +61,173 @@ export default function ReservationPanel({ campaign, storeId, stores }: { campai
   const [error, setError] = useState('')
 
   const load = useCallback(async () => {
-    const [itemResult, staffResult, reservationResult] = await Promise.all([
-      supabase.from('presale_items')
-        .select('campaign_id, product_id, discount_type, discount_value, product:products!inner(id, brand, name, sale_price)')
-        .eq('campaign_id', campaign.id),
-      supabase.from('staff').select('id, store_id, name, sort_order, is_active').order('sort_order').order('id'),
-      fetchAll((start, end) => {
-        let query = supabase.from('presale_reservations').select('*').eq('campaign_id', campaign.id)
-        if (storeId !== null) query = query.eq('store_id', storeId)
-        return query.order('created_at').order('id').range(start, end)
-      }),
+    if (access) {
+      const { data, error: loadError } = await supabase.rpc('presale_portal_data', { p_token: access.token, p_pin: access.pin })
+      if (loadError) { setError(loadError.message); return }
+      const portal = data as PortalData
+      setItems(portal.items.filter((item) => item.campaign_id === campaign.id))
+      setTiers(portal.tiers.filter((tier) => tier.campaign_id === campaign.id))
+      setStaff(portal.staff)
+      setGoals(portal.goals.filter((goal) => goal.campaign_id === campaign.id))
+      setOrders(portal.orders.filter((order) => order.campaign_id === campaign.id))
+      return
+    }
+    const [itemResult, tierResult, staffResult, goalResult, orderResult, lineResult] = await Promise.all([
+      supabase.from('presale_items').select('*, product:products!inner(brand, name, sale_price)').eq('campaign_id', campaign.id),
+      supabase.from('presale_bulk_tiers').select('*').eq('campaign_id', campaign.id),
+      supabase.from('staff').select('*').order('sort_order').order('id'),
+      supabase.from('presale_staff_goals').select('*').eq('campaign_id', campaign.id),
+      fetchAll((start, end) => supabase.from('presale_orders').select('*').eq('campaign_id', campaign.id).order('id').range(start, end)),
+      fetchAll((start, end) => supabase.from('presale_order_lines').select('*, presale_orders!inner(campaign_id)')
+        .eq('presale_orders.campaign_id', campaign.id).order('id').range(start, end)),
     ])
-    if (itemResult.error || staffResult.error || reservationResult.error) setError('データを読み込めませんでした。')
-    setItems(((itemResult.data ?? []) as unknown as ItemProduct[]).map((item) => ({
-      ...item,
-      discount_value: Number(item.discount_value),
-      product: Array.isArray(item.product) ? item.product[0] : item.product,
-    })).sort((a, b) => `${a.product.brand ?? ''}${a.product.name}`.localeCompare(`${b.product.brand ?? ''}${b.product.name}`, 'ja')))
+    if (itemResult.error || tierResult.error || staffResult.error || goalResult.error || orderResult.error || lineResult.error) {
+      setError('データを読み込めませんでした。')
+    }
+    setItems((itemResult.data ?? []).map((row) => {
+      const product = Array.isArray(row.product) ? row.product[0] : row.product
+      return { ...row, brand: product.brand, name: product.name, sale_price: product.sale_price } as PresaleItemWithProduct
+    }))
+    setTiers((tierResult.data ?? []) as BulkTier[])
     setStaff((staffResult.data ?? []) as Staff[])
-    setReservations((reservationResult.data ?? []) as Reservation[])
-  }, [campaign.id, storeId])
+    setGoals((goalResult.data ?? []) as StaffGoal[])
+    const linesByOrder = new Map<string, PresaleOrder['lines']>()
+    ;(lineResult.data ?? []).forEach((line) => linesByOrder.set(line.order_id, [...(linesByOrder.get(line.order_id) ?? []), line]))
+    setOrders(((orderResult.data ?? []) as PresaleOrder[]).map((order) => ({ ...order, lines: linesByOrder.get(order.id) ?? [] })))
+  }, [access, campaign.id])
 
   useEffect(() => { void load() }, [load])
 
   const itemMap = useMemo(() => new Map(items.map((item) => [item.product_id, item])), [items])
+  const sortedItems = useMemo(() => [...items].sort((a, b) => `${a.brand ?? ''}${a.name}`.localeCompare(`${b.brand ?? ''}${b.name}`, 'ja')), [items])
   const staffMap = useMemo(() => new Map(staff.map((person) => [person.id, person])), [staff])
   const storeName = useMemo(() => new Map(stores.map((store) => [store.id, store.name])), [stores])
-  const staffForStore = (id: number | null) => staff.filter((person) => person.is_active && person.store_id === id)
+  const formStaff = staff.filter((person) => person.is_active && person.store_id === draft.store_id)
+  const rpcAccess = { p_token: access?.token ?? null, p_pin: access?.pin ?? null }
 
-  const selectedItem = draft.product_id ? itemMap.get(Number(draft.product_id)) : undefined
-  const regular = selectedItem ? regularPriceWithTax(selectedItem.product.sale_price) : null
-  const unit = selectedItem ? discountedPrice(regular, selectedItem.discount_type, selectedItem.discount_value) : null
-  const quantity = parseInt(draft.quantity, 10)
+  const draftLines = draft.lines
+    .filter((line) => line.product_id && parseInt(line.quantity, 10) > 0)
+    .map((line) => ({ product_id: Number(line.product_id), quantity: parseInt(line.quantity, 10) }))
+  const estimate = priceOrder(draftLines, itemMap, tiers)
+  const sortedTiers = [...tiers].sort((a, b) => a.min_qty - b.min_qty)
+  const nextTier = sortedTiers.find((tier) => tier.min_qty > estimate.count)
 
-  function startEdit(row: Reservation) {
-    setEditingId(row.id)
+  function setLine(index: number, patch: Partial<DraftLine>) {
+    setDraft((previous) => ({ ...previous, lines: previous.lines.map((line, i) => i === index ? { ...line, ...patch } : line) }))
+  }
+
+  function startEdit(order: PresaleOrder) {
     setDraft({
-      store_id: row.store_id,
-      reserved_on: row.reserved_on,
-      customer_name: row.customer_name,
-      stylist_id: row.stylist_id ? String(row.stylist_id) : '',
-      staff_id: row.staff_id ? String(row.staff_id) : '',
-      product_id: String(row.product_id),
-      quantity: String(row.quantity),
+      id: order.id,
+      store_id: order.store_id,
+      reserved_on: order.reserved_on,
+      customer_name: order.customer_name,
+      stylist_id: order.stylist_id ? String(order.stylist_id) : '',
+      staff_id: order.staff_id ? String(order.staff_id) : '',
+      lines: order.lines.map((line) => ({ product_id: String(line.product_id), quantity: String(line.quantity) })),
     })
     setMessage('')
     setError('')
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
-  function cancelEdit() {
-    setEditingId(null)
-    setDraft(emptyDraft(storeId))
-  }
-
   async function save() {
     if (!draft.store_id) { setError('店舗を選んでください。'); return }
-    if (!draft.customer_name.trim()) { setError('お客様の名前を入力してください。'); return }
+    if (!draft.customer_name.trim()) { setError('お客様の氏名を入力してください。'); return }
     if (!draft.stylist_id) { setError('担当スタイリストを選んでください。'); return }
-    if (!draft.staff_id) { setError('登録スタッフを選んでください。'); return }
-    if (!selectedItem) { setError('商品を選んでください。'); return }
-    if (!Number.isFinite(quantity) || quantity < 1) { setError('数量は1以上で入力してください。'); return }
-    if (unit === null) { setError('この商品は販売価格が未入力です。本部に価格の入力を依頼してください。'); return }
+    if (!draft.staff_id) { setError('お勧めしたスタッフを選んでください。'); return }
+    if (draftLines.length === 0) { setError('商品と数量を入れてください。'); return }
+    if (estimate.missingPrice) { setError('販売価格が未入力の商品があります。本部に価格の入力を依頼してください。'); return }
     setSaving(true)
     setError('')
-    const editing = editingId ? reservations.find((row) => row.id === editingId) : undefined
-    // 修正で商品を変えなければ、予約時の金額はそのまま（あとで割引が変わっても予約済みの金額は変えない）
-    const keepPrice = editing && editing.product_id === selectedItem.product_id
-    const payload = {
-      campaign_id: campaign.id,
-      store_id: draft.store_id,
-      reserved_on: draft.reserved_on,
-      customer_name: draft.customer_name.trim(),
-      stylist_id: Number(draft.stylist_id),
-      staff_id: Number(draft.staff_id),
-      product_id: selectedItem.product_id,
-      quantity,
-      regular_price: keepPrice ? editing.regular_price : regular,
-      unit_price: keepPrice ? editing.unit_price : unit,
-      updated_at: new Date().toISOString(),
-    }
-    const { error: saveError } = editingId
-      ? await supabase.from('presale_reservations').update(payload).eq('id', editingId)
-      : await supabase.from('presale_reservations').insert(payload)
+    const { error: saveError } = await supabase.rpc('save_presale_order', {
+      p_store_id: draft.store_id,
+      ...rpcAccess,
+      p_order: {
+        id: draft.id,
+        campaign_id: campaign.id,
+        reserved_on: draft.reserved_on,
+        customer_name: draft.customer_name.trim(),
+        stylist_id: draft.stylist_id,
+        staff_id: draft.staff_id,
+        lines: draftLines,
+      },
+    })
     setSaving(false)
     if (saveError) { setError(saveError.message); return }
-    setMessage(editingId ? '予約を修正しました。' : `${payload.customer_name}様の予約を登録しました。`)
-    // 続けて入力しやすいよう、日付・スタッフは残す
+    setMessage(draft.id ? '予約を修正しました。' : `${draft.customer_name.trim()}様の予約を登録しました（${yen(estimate.total)}）。`)
+    // 続けて入力しやすいよう、日付とお勧めしたスタッフは残す
     setDraft((previous) => ({ ...emptyDraft(storeId), store_id: previous.store_id, reserved_on: previous.reserved_on, staff_id: previous.staff_id }))
-    setEditingId(null)
     await load()
   }
 
-  async function toggleDelivered(row: Reservation) {
-    const next = !row.delivered_at
+  async function toggleDelivered(order: PresaleOrder) {
+    const next = !order.delivered_at
     if (!next && !confirm('お渡し済みを取り消します。在庫も元に戻ります。よろしいですか？')) return
-    setBusyId(row.id)
+    setBusyId(order.id)
     setError('')
-    const { error: rpcError } = await supabase.rpc('set_presale_delivered', { p_id: row.id, p_delivered: next })
+    const { error: rpcError } = await supabase.rpc('set_presale_order_delivered', { p_store_id: order.store_id, ...rpcAccess, p_order_id: order.id, p_delivered: next })
     setBusyId('')
     if (rpcError) { setError(rpcError.message); return }
     await load()
   }
 
-  async function toggleCancelled(row: Reservation) {
-    const cancelling = !row.cancelled_at
-    if (!confirm(cancelling ? `${row.customer_name}様の予約をキャンセルにします。よろしいですか？` : 'キャンセルを取り消して、予約に戻します。よろしいですか？')) return
-    setBusyId(row.id)
+  async function toggleCancelled(order: PresaleOrder) {
+    const cancelling = !order.cancelled_at
+    if (!confirm(cancelling ? `${order.customer_name}様の予約をキャンセルにします。よろしいですか？` : 'キャンセルを取り消して、予約に戻します。よろしいですか？')) return
+    setBusyId(order.id)
     setError('')
-    const { error: updateError } = await supabase.from('presale_reservations')
-      .update({ cancelled_at: cancelling ? new Date().toISOString() : null, updated_at: new Date().toISOString() }).eq('id', row.id)
+    const { error: rpcError } = await supabase.rpc('set_presale_order_cancelled', { p_store_id: order.store_id, ...rpcAccess, p_order_id: order.id, p_cancelled: cancelling })
     setBusyId('')
-    if (updateError) { setError(updateError.message); return }
+    if (rpcError) { setError(rpcError.message); return }
     await load()
   }
+
+  const scopedOrders = orders.filter((order) => filterStore === 'all' || order.store_id === filterStore)
 
   // 未渡し → お渡し済み → キャンセル の順。同じ中では予約日の新しい順
   const visible = useMemo(() => {
     const keyword = normalize(search)
-    const rank = (row: Reservation) => (row.cancelled_at ? 2 : row.delivered_at ? 1 : 0)
-    return reservations
-      .filter((row) => filterStore === 'all' || row.store_id === filterStore)
-      .filter((row) => !onlyOpen || (!row.delivered_at && !row.cancelled_at))
-      .filter((row) => !keyword || normalize(`${row.customer_name}${itemMap.get(row.product_id)?.product.name ?? ''}`).includes(keyword))
+    const rank = (order: PresaleOrder) => (order.cancelled_at ? 2 : order.delivered_at ? 1 : 0)
+    return scopedOrders
+      .filter((order) => !onlyOpen || (!order.delivered_at && !order.cancelled_at))
+      .filter((order) => !keyword || normalize(`${order.customer_name}${order.lines.map((line) => itemMap.get(line.product_id)?.name ?? '').join('')}`).includes(keyword))
       .sort((a, b) => rank(a) - rank(b) || b.reserved_on.localeCompare(a.reserved_on) || b.created_at.localeCompare(a.created_at))
-  }, [filterStore, itemMap, onlyOpen, reservations, search])
+  }, [itemMap, onlyOpen, scopedOrders, search])
 
-  const counts = useMemo(() => {
-    const active = reservations.filter((row) => !row.cancelled_at && (filterStore === 'all' || row.store_id === filterStore))
-    return {
-      total: active.length,
-      delivered: active.filter((row) => row.delivered_at).length,
-      amount: active.reduce((sum, row) => sum + (row.unit_price ?? 0) * row.quantity, 0),
-    }
-  }, [filterStore, reservations])
+  const active = scopedOrders.filter((order) => !order.cancelled_at)
+  const totals = {
+    count: active.length,
+    delivered: active.filter((order) => order.delivered_at).length,
+    amount: active.reduce((sum, order) => sum + order.total_amount, 0),
+  }
 
-  const formStaff = staffForStore(draft.store_id)
+  // スタッフごとの目標と実績（お勧めしたスタッフで集計、キャンセル除く、割引後の税込）
+  const progress = useMemo(() => {
+    const goalMap = new Map(goals.map((goal) => [goal.staff_id, goal.goal_amount]))
+    const targetStores = storeId !== null ? [storeId] : filterStore === 'all' ? stores.map((store) => store.id) : [filterStore]
+    return staff
+      .filter((person) => targetStores.includes(person.store_id))
+      .map((person) => {
+        const mine = orders.filter((order) => !order.cancelled_at && order.staff_id === person.id)
+        return {
+          person,
+          goal: goalMap.get(person.id) ?? 0,
+          reserved: mine.reduce((sum, order) => sum + order.total_amount, 0),
+          delivered: mine.filter((order) => order.delivered_at).reduce((sum, order) => sum + order.total_amount, 0),
+          count: mine.length,
+        }
+      })
+      .filter((row) => row.person.is_active || row.count > 0)
+  }, [filterStore, goals, orders, staff, storeId, stores])
 
   return (
     <div className="space-y-4">
-      <section className={`rounded-2xl border bg-white p-4 shadow-sm ${editingId ? 'border-amber-300' : 'border-gray-200'}`}>
-        <h2 className="mb-3 font-bold text-gray-800">{editingId ? '予約を修正' : '予約を登録'}</h2>
+      <section className={`rounded-2xl border bg-white p-4 shadow-sm ${draft.id ? 'border-amber-300' : 'border-gray-200'}`}>
+        <h2 className="mb-1 font-bold text-gray-800">{draft.id ? '予約を修正' : '予約を登録'}</h2>
+        {sortedTiers.length > 0 && (
+          <p className="mb-3 text-xs text-pink-700">まとめ買い：{sortedTiers.map((tier) => `${tier.min_qty}個以上で${Number(tier.percent)}%オフ`).join('／')}（美容機器は個数に含みません）</p>
+        )}
         <div className="grid gap-3 sm:grid-cols-2">
           {storeId === null && (
             <label className="block text-xs font-medium text-gray-500">店舗
@@ -212,7 +253,7 @@ export default function ReservationPanel({ campaign, storeId, stores }: { campai
               {formStaff.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}
             </select>
           </label>
-          <label className="block text-xs font-medium text-gray-500">登録したスタッフ
+          <label className="block text-xs font-medium text-gray-500">お勧めしたスタッフ
             <select value={draft.staff_id} onChange={(event) => setDraft({ ...draft, staff_id: event.target.value })}
               className="mt-1 block w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-base">
               <option value="">選んでください</option>
@@ -221,48 +262,89 @@ export default function ReservationPanel({ campaign, storeId, stores }: { campai
           </label>
         </div>
         {draft.store_id !== null && formStaff.length === 0 && (
-          <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">この店舗のスタッフ名簿がまだ登録されていません。本部の「先行予約」→「スタッフ名簿」で登録してください。</p>
+          <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">この店舗のスタッフ名簿がまだありません。本部に登録を依頼してください。</p>
         )}
-        <div className="mt-3 grid gap-3 sm:grid-cols-[1fr_6rem]">
-          <label className="block text-xs font-medium text-gray-500">商品
-            <select value={draft.product_id} onChange={(event) => setDraft({ ...draft, product_id: event.target.value })}
-              className="mt-1 block w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-base">
-              <option value="">選んでください</option>
-              {items.map((item) => (
-                <option key={item.product_id} value={item.product_id}>{item.product.brand ? `${item.product.brand} ` : ''}{item.product.name}</option>
-              ))}
-            </select>
-          </label>
-          <label className="block text-xs font-medium text-gray-500">数量
-            <input inputMode="numeric" value={draft.quantity} onChange={(event) => setDraft({ ...draft, quantity: event.target.value })}
-              className="mt-1 block w-full rounded-xl border border-gray-200 px-3 py-2.5 text-center text-base font-bold" />
-          </label>
+
+        <div className="mt-4 space-y-2">
+          <div className="text-xs font-medium text-gray-500">商品と数量</div>
+          {draft.lines.map((line, index) => {
+            const priced = estimate.lines.find((item) => String(item.product_id) === line.product_id)
+            const item = line.product_id ? itemMap.get(Number(line.product_id)) : undefined
+            return (
+              <div key={index} className="rounded-xl border border-gray-100 bg-gray-50 p-2">
+                <div className="flex gap-2">
+                  <select value={line.product_id} onChange={(event) => setLine(index, { product_id: event.target.value })}
+                    className="min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-2 py-2 text-base">
+                    <option value="">商品を選ぶ</option>
+                    {sortedItems.map((option) => (
+                      <option key={option.product_id} value={option.product_id}>{option.brand ? `${option.brand} ` : ''}{option.name}</option>
+                    ))}
+                  </select>
+                  <input inputMode="numeric" value={line.quantity} onChange={(event) => setLine(index, { quantity: event.target.value })}
+                    className="w-16 rounded-lg border border-gray-200 bg-white px-2 py-2 text-center text-base font-bold" />
+                  <button onClick={() => setDraft((previous) => ({ ...previous, lines: previous.lines.length > 1 ? previous.lines.filter((_, i) => i !== index) : [{ product_id: '', quantity: '1' }] }))}
+                    className="shrink-0 rounded-lg px-2 text-lg text-gray-400" aria-label="この行を削除">×</button>
+                </div>
+                {item && (
+                  <div className="mt-1 flex flex-wrap items-center justify-between gap-2 px-1 text-xs">
+                    <span className="text-gray-500">
+                      通常 {yen(regularPriceWithTax(item.sale_price))}・{item.bulk_excluded ? '美容機器（まとめ買い対象外）・' : ''}
+                      {estimate.percent !== null && !item.bulk_excluded ? `まとめ買い${estimate.percent}%オフ` : discountLabel(item.discount_type, Number(item.discount_value))}
+                    </span>
+                    <span className="font-bold text-blue-700">{priced ? `${yen(priced.unit_price)} × ${priced.quantity} ＝ ${yen((priced.unit_price ?? 0) * priced.quantity)}` : ''}</span>
+                  </div>
+                )}
+              </div>
+            )
+          })}
+          <button onClick={() => setDraft((previous) => ({ ...previous, lines: [...previous.lines, { product_id: '', quantity: '1' }] }))}
+            className="w-full rounded-xl border border-dashed border-gray-300 py-2 text-sm text-gray-600">＋ 商品を追加</button>
         </div>
-        {selectedItem && (
-          <div className="mt-3 flex flex-wrap items-baseline justify-between gap-2 rounded-xl bg-blue-50 px-4 py-3">
-            <div className="text-xs text-gray-500">
-              通常 <span className="line-through">{yen(regular)}</span>（税込）・{discountLabel(selectedItem.discount_type, selectedItem.discount_value)}
-            </div>
-            <div className="text-right">
-              <div className="text-xs text-gray-500">1個 {yen(unit)}</div>
-              <div className="text-xl font-bold text-blue-700">合計 {unit === null || !Number.isFinite(quantity) ? '−' : yen(unit * quantity)}</div>
-            </div>
+
+        <div className="mt-3 flex flex-wrap items-end justify-between gap-2 rounded-xl bg-blue-50 px-4 py-3">
+          <div className="text-xs text-gray-600">
+            まとめ買いの個数 {estimate.count}個{estimate.percent !== null ? `（${estimate.percent}%オフ適用）` : ''}
+            {nextTier && <div className="text-pink-700">あと{nextTier.min_qty - estimate.count}個で{Number(nextTier.percent)}%オフ</div>}
           </div>
-        )}
+          <div className="text-xl font-bold text-blue-700">合計 {yen(estimate.total)}<span className="ml-1 text-xs font-normal">（税込）</span></div>
+        </div>
         {message && <p className="mt-3 rounded-xl bg-green-50 px-3 py-2 text-sm text-green-700">{message}</p>}
         {error && <p className="mt-3 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}
         <div className="mt-4 flex gap-2">
-          {editingId && <button onClick={cancelEdit} className="flex-1 rounded-xl border border-gray-200 py-3 text-sm text-gray-600">やめる</button>}
+          {draft.id && <button onClick={() => setDraft(emptyDraft(storeId))} className="flex-1 rounded-xl border border-gray-200 py-3 text-sm text-gray-600">やめる</button>}
           <button onClick={() => void save()} disabled={saving} className="flex-1 rounded-xl bg-blue-500 py-3 font-bold text-white disabled:opacity-50">
-            {saving ? '保存中...' : editingId ? '修正を保存' : '予約を登録'}
+            {saving ? '保存中...' : draft.id ? '修正を保存' : '予約を登録'}
           </button>
+        </div>
+      </section>
+
+      <section className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+        <h2 className="mb-3 font-bold text-gray-800">スタッフの目標と予約金額</h2>
+        <div className="space-y-2">
+          {progress.map(({ person, goal, reserved, delivered, count }) => {
+            const ratio = goal > 0 ? Math.min(100, Math.round((reserved / goal) * 100)) : 0
+            return (
+              <div key={person.id}>
+                <div className="flex flex-wrap items-baseline justify-between gap-2 text-sm">
+                  <span className="font-bold text-gray-800">{person.name}{storeId === null && <span className="ml-1 text-[11px] font-normal text-gray-400">{storeName.get(person.store_id)}</span>}</span>
+                  <span className="text-xs text-gray-600">
+                    予約 <b className="text-blue-700">{yen(reserved)}</b>（{count}件）／目標 {goal > 0 ? yen(goal) : '未設定'}
+                    {goal > 0 && <b className="ml-1 text-pink-700">{Math.round((reserved / goal) * 100)}%</b>}
+                    <span className="ml-2 text-green-700">お渡し済み {yen(delivered)}</span>
+                  </span>
+                </div>
+                {goal > 0 && <div className="mt-1 h-2 overflow-hidden rounded-full bg-gray-100"><div className="h-full rounded-full bg-pink-500" style={{ width: `${ratio}%` }} /></div>}
+              </div>
+            )
+          })}
+          {progress.length === 0 && <p className="py-4 text-center text-sm text-gray-400">スタッフ名簿がありません</p>}
         </div>
       </section>
 
       <section className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
         <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
           <h2 className="font-bold text-gray-800">予約一覧</h2>
-          <span className="text-xs text-gray-500">予約 {counts.total}件（お渡し済み {counts.delivered}件）・合計 {yen(counts.amount)}</span>
+          <span className="text-xs text-gray-500">予約 {totals.count}件（お渡し済み {totals.delivered}件）・合計 {yen(totals.amount)}</span>
         </div>
         <div className="mb-3 grid gap-2 sm:grid-cols-3">
           {storeId === null && (
@@ -280,33 +362,43 @@ export default function ReservationPanel({ campaign, storeId, stores }: { campai
           </label>
         </div>
         <div className="divide-y divide-gray-100">
-          {visible.map((row) => {
-            const item = itemMap.get(row.product_id)
-            const delivered = !!row.delivered_at
-            const cancelled = !!row.cancelled_at
+          {visible.map((order) => {
+            const delivered = !!order.delivered_at
+            const cancelled = !!order.cancelled_at
             return (
-              <div key={row.id} className={`flex items-start gap-3 px-2 py-3 ${cancelled ? 'bg-gray-50 opacity-50' : delivered ? 'bg-green-50' : ''}`}>
+              <div key={order.id} className={`flex items-start gap-3 px-2 py-3 ${cancelled ? 'bg-gray-50 opacity-50' : delivered ? 'bg-green-50' : ''}`}>
                 <label className="flex shrink-0 flex-col items-center gap-0.5 pt-0.5 text-[10px] text-gray-500">
-                  <input type="checkbox" checked={delivered} disabled={cancelled || busyId === row.id} onChange={() => void toggleDelivered(row)} className="h-6 w-6 accent-green-600" />
+                  <input type="checkbox" checked={delivered} disabled={cancelled || busyId === order.id} onChange={() => void toggleDelivered(order)} className="h-6 w-6 accent-green-600" />
                   お渡し
                 </label>
                 <div className="min-w-0 flex-1">
                   <div className="text-[11px] text-gray-400">
-                    {row.reserved_on}{storeId === null && `・${storeName.get(row.store_id) ?? ''}`}
-                    ・担当 {staffMap.get(row.stylist_id ?? 0)?.name ?? '−'}・登録 {staffMap.get(row.staff_id ?? 0)?.name ?? '−'}
+                    {order.reserved_on}{storeId === null && `・${storeName.get(order.store_id) ?? ''}`}
+                    ・担当 {staffMap.get(order.stylist_id ?? 0)?.name ?? '−'}・お勧め {staffMap.get(order.staff_id ?? 0)?.name ?? '−'}
                   </div>
-                  <div className={`font-bold text-gray-800 ${cancelled ? 'line-through' : ''}`}>{row.customer_name} 様</div>
-                  <div className="break-words text-sm text-gray-700">{item?.product.brand} {item?.product.name ?? '（対象外になった商品）'} × {row.quantity}</div>
-                  <div className="text-xs text-gray-500">{yen(row.unit_price)} × {row.quantity} ＝ <span className="font-bold text-gray-700">{yen((row.unit_price ?? 0) * row.quantity)}</span></div>
-                  {delivered && <div className="mt-0.5 text-[11px] font-bold text-green-700">お渡し済み（{new Date(row.delivered_at!).toLocaleDateString('ja-JP', { timeZone: 'Asia/Tokyo' })}）</div>}
+                  <div className={`font-bold text-gray-800 ${cancelled ? 'line-through' : ''}`}>
+                    {order.customer_name} 様
+                    {order.applied_percent !== null && <span className="ml-2 rounded bg-pink-100 px-1.5 py-0.5 text-[10px] text-pink-700">まとめ買い{Number(order.applied_percent)}%</span>}
+                  </div>
+                  <ul className="mt-0.5 space-y-0.5 text-sm text-gray-700">
+                    {order.lines.map((line) => {
+                      const item = itemMap.get(line.product_id)
+                      return (
+                        <li key={line.id ?? line.product_id} className="break-words">
+                          {item ? `${item.brand ? `${item.brand} ` : ''}${item.name}` : '（対象外になった商品）'} × {line.quantity}
+                          <span className="ml-1 text-xs text-gray-500">{yen(line.unit_price)}</span>
+                        </li>
+                      )
+                    })}
+                  </ul>
+                  <div className="text-sm font-bold text-gray-800">合計 {yen(order.total_amount)}</div>
+                  {delivered && <div className="mt-0.5 text-[11px] font-bold text-green-700">お渡し済み（{new Date(order.delivered_at!).toLocaleDateString('ja-JP', { timeZone: 'Asia/Tokyo' })}）</div>}
                   {cancelled && <div className="mt-0.5 text-[11px] font-bold text-gray-500">キャンセル</div>}
                 </div>
                 <div className="flex shrink-0 flex-col gap-1.5">
-                  {!delivered && !cancelled && (
-                    <button onClick={() => startEdit(row)} className="rounded-lg bg-blue-50 px-2.5 py-1.5 text-xs font-medium text-blue-700">修正</button>
-                  )}
+                  {!delivered && !cancelled && <button onClick={() => startEdit(order)} className="rounded-lg bg-blue-50 px-2.5 py-1.5 text-xs font-medium text-blue-700">修正</button>}
                   {!delivered && (
-                    <button onClick={() => void toggleCancelled(row)} disabled={busyId === row.id} className="rounded-lg bg-gray-100 px-2.5 py-1.5 text-xs text-gray-600">
+                    <button onClick={() => void toggleCancelled(order)} disabled={busyId === order.id} className="rounded-lg bg-gray-100 px-2.5 py-1.5 text-xs text-gray-600">
                       {cancelled ? '予約に戻す' : 'キャンセル'}
                     </button>
                   )}

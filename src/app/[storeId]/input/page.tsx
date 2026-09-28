@@ -35,7 +35,6 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
   const [pendingWrites, setPendingWrites] = useState(0)
   const [completed, setCompleted] = useState(false)
   const [saveError, setSaveError] = useState('')
-  const [presaleName, setPresaleName] = useState<string | null>(null)
   const [showConfirm, setShowConfirm] = useState(false)
 
   useEffect(() => {
@@ -73,10 +72,6 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
         .eq('products.is_active', true),
     ])
     if (storeResult.data) setStore(storeResult.data)
-    // 先行予約の受付中だけ、予約ページへのボタンを出す
-    const { data: activeCampaign } = await supabase.from('presale_campaigns').select('name').eq('is_active', true)
-      .order('id', { ascending: false }).limit(1).maybeSingle()
-    setPresaleName(activeCampaign?.name ?? null)
 
     const categoryList = categoryResult.data ?? []
     const categoryById = new Map(categoryList.map((category) => [category.id, category]))
@@ -333,12 +328,6 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
           </div>
           <button onClick={handleLogout} className="text-xs text-gray-400 underline">退出</button>
         </div>
-        {presaleName && (
-          <button onClick={() => router.push(`/${storeId}/presale`)}
-            className="mx-3 mb-2 block w-[calc(100%-1.5rem)] rounded-xl bg-pink-50 py-2 text-sm font-bold text-pink-700">
-            先行予約（{presaleName}）の予約・お渡しはこちら
-          </button>
-        )}
         {/* カテゴリタブ */}
         <div className="flex overflow-x-auto gap-1 px-3 pb-2 scrollbar-hide">
           {categories.map((cat) => (
