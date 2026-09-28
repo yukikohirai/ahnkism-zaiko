@@ -408,7 +408,7 @@ export default function ProductManagementPage() {
         {showPrices && <PriceTable categories={categories} />}
 
         <button onClick={() => setShowMasters((value) => !value)} className="mb-3 w-full rounded-xl border border-slate-300 bg-slate-50 py-3 font-bold text-slate-700">
-          {showMasters ? '整理を閉じる' : '発注先・メーカー・ブランド・カテゴリを整理'}
+          {showMasters ? '整理を閉じる' : '発注先・メーカー・ブランド・カテゴリ・ジャンルを整理'}
         </button>
         {showMasters && <MasterManager products={products} categories={categories} onChanged={loadData} />}
 

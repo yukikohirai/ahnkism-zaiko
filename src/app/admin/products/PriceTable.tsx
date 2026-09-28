@@ -14,7 +14,9 @@ type PriceProduct = {
   cost_price: number | null
   sale_price: number | null
   product_type: 'material' | 'retail'
+  genre_id: number | null
 }
+type Genre = { id: number; name: string }
 
 function normalizeSearch(value: string) {
   return value.normalize('NFKC').toLocaleLowerCase().replace(/\s+/g, '')
@@ -26,6 +28,8 @@ export default function PriceTable({ categories }: { categories: Category[] }) {
   const [search, setSearch] = useState('')
   const [taxIncluded, setTaxIncluded] = useState(false)
   const [onlyMissing, setOnlyMissing] = useState(false)
+  const [onlyNoGenre, setOnlyNoGenre] = useState(false)
+  const [genres, setGenres] = useState<Genre[]>([])
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [savingKey, setSavingKey] = useState('')
   const [error, setError] = useState('')
@@ -33,12 +37,14 @@ export default function PriceTable({ categories }: { categories: Category[] }) {
   useEffect(() => {
     void (async () => {
       const { data, error: loadError } = await fetchAll((start, end) => supabase.from('products')
-        .select('id, category_id, brand, name, cost_price, sale_price, product_type')
+        .select('id, category_id, brand, name, cost_price, sale_price, product_type, genre_id')
         .eq('is_active', true)
         .order('sort_order').order('id')
         .range(start, end))
-      if (loadError) setError('商品を読み込めませんでした。')
+      const genreResult = await supabase.from('product_genres').select('id, name').order('sort_order').order('id')
+      if (loadError || genreResult.error) setError('商品を読み込めませんでした。')
       setProducts((data ?? []) as PriceProduct[])
+      setGenres((genreResult.data ?? []) as Genre[])
     })()
   }, [])
 
@@ -49,8 +55,22 @@ export default function PriceTable({ categories }: { categories: Category[] }) {
       .filter((product) => categoryId === 'all' || product.category_id === categoryId)
       .filter((product) => !keyword || normalizeSearch(`${product.brand ?? ''}${product.name}`).includes(keyword))
       .filter((product) => !onlyMissing || product.cost_price === null || (product.product_type === 'retail' && product.sale_price === null))
+      .filter((product) => !onlyNoGenre || product.genre_id === null)
       .sort((a, b) => (categoryOrder.get(a.category_id) ?? 999) - (categoryOrder.get(b.category_id) ?? 999))
-  }, [categoryId, categoryOrder, onlyMissing, products, search])
+  }, [categoryId, categoryOrder, onlyMissing, onlyNoGenre, products, search])
+  const noGenreCount = products.filter((product) => product.genre_id === null).length
+
+  async function saveGenre(product: PriceProduct, value: string) {
+    const genreId = value === '' ? null : Number(value)
+    setSavingKey(`${product.id}_genre`)
+    const { error: saveError } = await supabase.from('products').update({ genre_id: genreId }).eq('id', product.id)
+    setSavingKey('')
+    if (saveError) {
+      setError(`保存できませんでした：${saveError.message}`)
+      return
+    }
+    setProducts((previous) => previous.map((item) => item.id === product.id ? { ...item, genre_id: genreId } : item))
+  }
   const missingCount = products.filter((product) => product.cost_price === null).length
 
   function shown(amount: number | null) {
@@ -106,14 +126,14 @@ export default function PriceTable({ categories }: { categories: Category[] }) {
       <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
         <div>
           <h2 className="font-bold text-gray-800">価格をまとめて入力</h2>
-          <p className="text-xs text-gray-400">入力欄から離れると自動で保存します。仕入れ値が未入力の商品：{missingCount}件</p>
+          <p className="text-xs text-gray-400">入力欄から離れると自動で保存します。仕入れ値が未入力：{missingCount}件／ジャンル未設定：{noGenreCount}件</p>
         </div>
         <div className="flex rounded-lg bg-gray-100 p-0.5 text-xs font-medium">
           <button onClick={() => { setTaxIncluded(false); setDrafts({}) }} className={`rounded-md px-3 py-1.5 ${!taxIncluded ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500'}`}>税抜</button>
           <button onClick={() => { setTaxIncluded(true); setDrafts({}) }} className={`rounded-md px-3 py-1.5 ${taxIncluded ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500'}`}>税込</button>
         </div>
       </div>
-      <div className="mb-3 grid gap-2 sm:grid-cols-3">
+      <div className="mb-3 grid gap-2 sm:grid-cols-4">
         <select value={categoryId} onChange={(event) => setCategoryId(event.target.value === 'all' ? 'all' : Number(event.target.value))}
           className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-base">
           <option value="all">全カテゴリ</option>
@@ -125,15 +145,20 @@ export default function PriceTable({ categories }: { categories: Category[] }) {
           <input type="checkbox" checked={onlyMissing} onChange={(event) => setOnlyMissing(event.target.checked)} className="h-4 w-4" />
           未入力だけ表示
         </label>
+        <label className="flex items-center gap-2 rounded-xl bg-gray-50 px-3 py-2 text-sm text-gray-600">
+          <input type="checkbox" checked={onlyNoGenre} onChange={(event) => setOnlyNoGenre(event.target.checked)} className="h-4 w-4" />
+          ジャンル未設定だけ
+        </label>
       </div>
       {taxIncluded && <p className="mb-2 rounded-lg bg-amber-50 px-3 py-1.5 text-xs text-amber-700">税込で表示・入力中です。保存は税抜（÷1.1・四捨五入）で行います。</p>}
       {error && <p className="mb-2 rounded-lg bg-red-50 px-3 py-1.5 text-sm text-red-600">{error}</p>}
       <div className="max-h-[60vh] overflow-auto rounded-xl border border-gray-100">
-        <table className="w-full min-w-[560px] text-xs">
+        <table className="w-full min-w-[680px] text-xs">
           <thead className="sticky top-0 z-10 bg-gray-50 text-gray-500">
             <tr>
               <th className="px-3 py-2 text-left">商品</th>
               <th className="w-24 px-2 py-2 text-center">区分</th>
+              <th className="w-28 px-2 py-2 text-center">ジャンル</th>
               <th className="w-28 px-2 py-2 text-center">仕入れ値</th>
               <th className="w-28 px-2 py-2 text-center">販売価格</th>
             </tr>
@@ -151,6 +176,14 @@ export default function PriceTable({ categories }: { categories: Category[] }) {
                     className={`w-full rounded-lg border px-1 py-1.5 text-base ${product.product_type === 'retail' ? 'border-green-200 bg-green-50 text-green-700' : 'border-blue-200 bg-blue-50 text-blue-700'}`}>
                     <option value="material">業務用</option>
                     <option value="retail">店販用</option>
+                  </select>
+                </td>
+                <td className="px-2 py-1.5 text-center">
+                  <select value={product.genre_id ?? ''} disabled={savingKey === `${product.id}_genre`}
+                    onChange={(event) => void saveGenre(product, event.target.value)}
+                    className={`w-full rounded-lg border px-1 py-1.5 text-base ${product.genre_id === null ? 'border-amber-200 bg-amber-50 text-amber-700' : 'border-gray-200 bg-white text-gray-700'}`}>
+                    <option value="">未分類</option>
+                    {genres.map((genre) => <option key={genre.id} value={genre.id}>{genre.name}</option>)}
                   </select>
                 </td>
                 {(['cost_price', 'sale_price'] as const).map((field) => {

@@ -2,13 +2,14 @@
 
 import { useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
+import GenreManager from './GenreManager'
 
 type Field = 'dealer' | 'manufacturer' | 'brand'
-type Tab = Field | 'category'
+type Tab = Field | 'category' | 'genre'
 type Category = { id: number; name: string }
 type MasterProduct = { id: number; category_id: number; dealer: string | null; manufacturer: string | null; brand: string | null; is_active: boolean }
 
-const TAB_LABELS: Record<Tab, string> = { dealer: '発注先', manufacturer: 'メーカー', brand: 'ブランド', category: 'カテゴリ' }
+const TAB_LABELS: Record<Tab, string> = { dealer: '発注先', manufacturer: 'メーカー', brand: 'ブランド', category: 'カテゴリ', genre: 'ジャンル' }
 
 function normalize(value: string) {
   return value.normalize('NFKC').toLocaleLowerCase().replace(/\s+/g, '')
@@ -29,6 +30,7 @@ export default function MasterManager({ products, categories, onChanged }: {
 
   // 停止中の商品も含めて数える（名前を変えると停止中の商品にも反映される）
   const values = useMemo(() => {
+    if (tab === 'genre') return []
     if (tab === 'category') {
       return categories.map((category) => {
         const used = products.filter((product) => product.category_id === category.id)
@@ -118,7 +120,7 @@ export default function MasterManager({ products, categories, onChanged }: {
 
   return (
     <section className="mb-4 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
-      <h2 className="font-bold text-gray-800">発注先・メーカー・ブランド・カテゴリの整理</h2>
+      <h2 className="font-bold text-gray-800">発注先・メーカー・ブランド・カテゴリ・ジャンルの整理</h2>
       <p className="mb-3 text-xs text-gray-400">名前を変えると、その名前を使っている商品（停止中も含む）がまとめて変わります</p>
       <div className="mb-3 flex gap-1 overflow-x-auto">
         {(Object.keys(TAB_LABELS) as Tab[]).map((key) => (
@@ -128,6 +130,7 @@ export default function MasterManager({ products, categories, onChanged }: {
           </button>
         ))}
       </div>
+      {tab === 'genre' ? <GenreManager /> : (<>
       {message && <p className="mb-2 rounded-lg bg-green-50 px-3 py-2 text-sm text-green-700">{message}</p>}
       {error && <p className="mb-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}
       <div className="max-h-[60vh] divide-y divide-gray-100 overflow-auto rounded-xl border border-gray-100">
@@ -184,6 +187,7 @@ export default function MasterManager({ products, categories, onChanged }: {
         ))}
         {values.length === 0 && <p className="py-8 text-center text-sm text-gray-400">登録がありません</p>}
       </div>
+      </>)}
     </section>
   )
 }

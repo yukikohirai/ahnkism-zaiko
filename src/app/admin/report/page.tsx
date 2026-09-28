@@ -16,7 +16,9 @@ type ReportProduct = {
   cost_price: number | null
   product_type: 'material' | 'retail'
   usage_only: boolean
+  genre_id: number | null
 }
+type Genre = { id: number; name: string; sort_order: number }
 type Movement = { store_id: number; product_id: number; quantity: number; movement_type: string }
 type Sales = { store_id: number; treatment_sales: number | null; retail_sales: number | null }
 type Breakdown = {
@@ -51,6 +53,7 @@ export default function ReportPage() {
   const [taxIncluded, setTaxIncluded] = useState(false)
   const [stores, setStores] = useState<Store[]>([])
   const [products, setProducts] = useState<ReportProduct[]>([])
+  const [genres, setGenres] = useState<Genre[]>([])
   const [movements, setMovements] = useState<Movement[]>([])
   const [sales, setSales] = useState<Sales[]>([])
   const [drafts, setDrafts] = useState<Record<string, string>>({})
@@ -73,22 +76,24 @@ export default function ReportPage() {
     if (!authorized) return
     setLoading(true)
     setError('')
-    const [storeResult, productResult, movementResult, salesResult] = await Promise.all([
+    const [storeResult, productResult, movementResult, salesResult, genreResult] = await Promise.all([
       supabase.from('stores').select('id, name').order('sort_order'),
       // 停止中の商品にも今月の履歴が残っていることがあるので全件取る
-      fetchAll((start, end) => supabase.from('products').select('id, name, brand, cost_price, product_type, usage_only')
+      fetchAll((start, end) => supabase.from('products').select('id, name, brand, cost_price, product_type, usage_only, genre_id')
         .order('id').range(start, end)),
       fetchAll((start, end) => supabase.from('inventory_movements').select('store_id, product_id, quantity, movement_type')
         .gte('occurred_on', from).lte('occurred_on', to).order('id').range(start, end)),
       supabase.from('monthly_sales').select('store_id, treatment_sales, retail_sales').eq('year_month', ym),
+      supabase.from('product_genres').select('id, name, sort_order').order('sort_order').order('id'),
     ])
-    if (storeResult.error || productResult.error || movementResult.error || salesResult.error) {
+    if (storeResult.error || productResult.error || movementResult.error || salesResult.error || genreResult.error) {
       setError('データを読み込めませんでした。')
     }
     setStores((storeResult.data ?? []) as Store[])
     setProducts((productResult.data ?? []) as ReportProduct[])
     setMovements((movementResult.data ?? []) as Movement[])
     setSales((salesResult.data ?? []) as Sales[])
+    setGenres((genreResult.data ?? []) as Genre[])
     setDrafts({})
     setLoading(false)
   }, [authorized, from, to, ym])
@@ -98,8 +103,14 @@ export default function ReportPage() {
   const productMap = useMemo(() => new Map(products.map((product) => [product.id, product])), [products])
 
   // 材料費：業務用は入荷（＋店舗間移動の付け替え）、発注しない商品と店販用は使った分
-  const { byStore, missing } = useMemo(() => {
+  const { byStore, missing, byGenre } = useMemo(() => {
     const result = new Map<number, Breakdown>()
+    // ジャンル別材料費：店舗ID_ジャンルID（未分類は 0）
+    const genreTotals = new Map<string, number>()
+    const addGenre = (storeId: number, genreId: number | null, amount: number) => {
+      const key = `${storeId}_${genreId ?? 0}`
+      genreTotals.set(key, (genreTotals.get(key) ?? 0) + amount)
+    }
     const missingIds = new Set<number>()
     movements.forEach((movement) => {
       const product = productMap.get(movement.product_id)
@@ -118,19 +129,29 @@ export default function ReportPage() {
       const row = { ...(result.get(movement.store_id) ?? EMPTY) }
       if (product.usage_only) {
         row.usageOnly += -movement.quantity * cost
+        addGenre(movement.store_id, product.genre_id, -movement.quantity * cost)
       } else if (product.product_type === 'retail') {
-        if (movement.movement_type === 'usage') row.retailBusiness += -movement.quantity * cost
+        if (movement.movement_type === 'usage') {
+          row.retailBusiness += -movement.quantity * cost
+          addGenre(movement.store_id, product.genre_id, -movement.quantity * cost)
+        }
         if (movement.movement_type === 'retail_sale') row.retailCost += -movement.quantity * cost
         if (movement.movement_type === 'personal_sale') row.personal += -movement.quantity * cost
       } else {
-        if (movement.movement_type === 'purchase_order') row.purchase += movement.quantity * cost
-        if (movement.movement_type === 'transfer_in' || movement.movement_type === 'transfer_out') row.transfer += movement.quantity * cost
+        if (movement.movement_type === 'purchase_order') {
+          row.purchase += movement.quantity * cost
+          addGenre(movement.store_id, product.genre_id, movement.quantity * cost)
+        }
+        if (movement.movement_type === 'transfer_in' || movement.movement_type === 'transfer_out') {
+          row.transfer += movement.quantity * cost
+          addGenre(movement.store_id, product.genre_id, movement.quantity * cost)
+        }
         if (movement.movement_type === 'personal_sale') row.personal += -movement.quantity * cost
       }
       row.material = row.purchase + row.transfer + row.usageOnly + row.retailBusiness
       result.set(movement.store_id, row)
     })
-    return { byStore: result, missing: Array.from(missingIds).map((id) => productMap.get(id)!).filter(Boolean) }
+    return { byStore: result, byGenre: genreTotals, missing: Array.from(missingIds).map((id) => productMap.get(id)!).filter(Boolean) }
   }, [movements, productMap])
 
   const salesMap = useMemo(() => new Map(sales.map((row) => [row.store_id, row])), [sales])
@@ -288,31 +309,35 @@ export default function ReportPage() {
         </section>
 
         <section className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
-          <h2 className="mb-1 font-bold text-gray-800">材料費の内訳</h2>
-          <p className="mb-3 text-xs text-gray-400">業務用は仕入れた分（店舗間移動は移動先へ付け替え）、発注しない商品と店販用商品は使った分で計算</p>
+          <h2 className="mb-1 font-bold text-gray-800">材料費の内訳（ジャンル別）</h2>
+          <p className="mb-3 text-xs text-gray-400">ジャンルは商品管理の「価格をまとめて入力」で商品ごとに設定、ジャンルの追加・名称変更・削除は「整理」の「ジャンル」タブから</p>
           <div className="overflow-x-auto">
             <table className="w-max min-w-full text-sm">
               <thead className="bg-gray-50 text-xs text-gray-500">
                 <tr>
                   <th className="px-3 py-2 text-left">店舗</th>
-                  <th className="px-3 py-2 text-right">業務用の入荷</th>
-                  <th className="px-3 py-2 text-right">店舗間移動</th>
-                  <th className="px-3 py-2 text-right">発注しない商品の使用</th>
-                  <th className="px-3 py-2 text-right">店販商品の業務使用</th>
+                  {genres.map((genre) => <th key={genre.id} className="px-3 py-2 text-right">{genre.name}</th>)}
+                  <th className="px-3 py-2 text-right text-amber-600">未分類</th>
                   <th className="px-3 py-2 text-right">材料費 合計</th>
                 </tr>
               </thead>
               <tbody>
-                {[...stores.map((store) => ({ key: String(store.id), name: store.name, row: byStore.get(store.id) ?? EMPTY })), { key: 'total', name: '全店合計', row: total as Breakdown }].map(({ key, name, row }) => (
-                  <tr key={key} className={`border-t border-gray-100 ${key === 'total' ? 'bg-gray-50 font-bold' : ''}`}>
-                    <td className="px-3 py-2 font-bold text-gray-700">{name}</td>
-                    <td className="px-3 py-2 text-right">{money(row.purchase)}</td>
-                    <td className={`px-3 py-2 text-right ${row.transfer < 0 ? 'text-red-600' : ''}`}>{row.transfer === 0 ? '−' : money(row.transfer)}</td>
-                    <td className="px-3 py-2 text-right">{money(row.usageOnly)}</td>
-                    <td className="px-3 py-2 text-right">{money(row.retailBusiness)}</td>
-                    <td className="px-3 py-2 text-right font-bold">{money(row.material)}</td>
-                  </tr>
-                ))}
+                {[...stores.map((store) => ({ key: String(store.id), name: store.name, ids: [store.id] })), { key: 'total', name: '全店合計', ids: stores.map((store) => store.id) }].map(({ key, name, ids }) => {
+                  const cell = (genreId: number) => ids.reduce((sum, id) => sum + (byGenre.get(`${id}_${genreId}`) ?? 0), 0)
+                  const unassigned = cell(0)
+                  const totalMaterial = ids.reduce((sum, id) => sum + (byStore.get(id)?.material ?? 0), 0)
+                  return (
+                    <tr key={key} className={`border-t border-gray-100 ${key === 'total' ? 'bg-gray-50 font-bold' : ''}`}>
+                      <td className="px-3 py-2 font-bold text-gray-700">{name}</td>
+                      {genres.map((genre) => {
+                        const amount = cell(genre.id)
+                        return <td key={genre.id} className={`px-3 py-2 text-right ${amount < 0 ? 'text-red-600' : ''}`}>{amount === 0 ? '−' : money(amount)}</td>
+                      })}
+                      <td className={`px-3 py-2 text-right ${unassigned !== 0 ? 'text-amber-600' : ''}`}>{unassigned === 0 ? '−' : money(unassigned)}</td>
+                      <td className="px-3 py-2 text-right font-bold">{money(totalMaterial)}</td>
+                    </tr>
+                  )
+                })}
               </tbody>
             </table>
           </div>

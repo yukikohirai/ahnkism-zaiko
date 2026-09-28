@@ -346,8 +346,8 @@ export default function OperationsPage() {
       else setMessage('在庫の減少理由を登録しました。')
     }
     setSaving(false)
+    // 同じ検索語で続けて登録することが多いので、検索はそのまま残す
     setProductId(null)
-    setSearch('')
     setQuantity(1)
     setActualStock('')
     await Promise.all([loadData(), loadHistory()])
