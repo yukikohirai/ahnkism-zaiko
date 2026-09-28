@@ -37,6 +37,10 @@ export default function PriceTable({ categories }: { categories: Category[] }) {
   const [assignments, setAssignments] = useState<Assignment[]>([])
   const [storeView, setStoreView] = useState<string>('')
   const [showGenres, setShowGenres] = useState(false)
+  const [selected, setSelected] = useState<Set<number>>(new Set())
+  const [bulkGenre, setBulkGenre] = useState('')
+  const [bulkSaving, setBulkSaving] = useState(false)
+  const [bulkMessage, setBulkMessage] = useState('')
 
   // ジャンルを追加・名称変更・削除したら、表の選択肢と商品の割り当てを読み直す
   const reloadGenres = useCallback(async () => {
@@ -105,6 +109,40 @@ export default function PriceTable({ categories }: { categories: Category[] }) {
         || a.id - b.id)
   }, [categoryId, categoryOrder, onlyMissing, onlyNoGenre, products, search, storeSort, storeView])
   const noGenreCount = products.filter((product) => product.genre_id === null).length
+
+  // チェックした商品のジャンルをまとめて設定する
+  async function applyBulkGenre() {
+    const ids = Array.from(selected)
+    if (ids.length === 0 || bulkGenre === '') return
+    const genreId = bulkGenre === 'none' ? null : Number(bulkGenre)
+    const label = genreId === null ? '未分類' : genres.find((genre) => genre.id === genreId)?.name
+    if (!confirm(`チェックした${ids.length}件のジャンルを「${label}」にします。よろしいですか？`)) return
+    setBulkSaving(true)
+    setError('')
+    setBulkMessage('')
+    for (let start = 0; start < ids.length; start += 200) {
+      const { error: saveError } = await supabase.from('products').update({ genre_id: genreId }).in('id', ids.slice(start, start + 200))
+      if (saveError) {
+        setBulkSaving(false)
+        setError(`保存できませんでした：${saveError.message}`)
+        return
+      }
+    }
+    const idSet = new Set(ids)
+    setProducts((previous) => previous.map((item) => idSet.has(item.id) ? { ...item, genre_id: genreId } : item))
+    setSelected(new Set())
+    setBulkSaving(false)
+    setBulkMessage(`${ids.length}件を「${label}」にしました。`)
+  }
+
+  function toggle(id: number) {
+    setSelected((previous) => {
+      const next = new Set(previous)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
 
   async function saveGenre(product: PriceProduct, value: string) {
     const genreId = value === '' ? null : Number(value)
@@ -216,10 +254,33 @@ export default function PriceTable({ categories }: { categories: Category[] }) {
       </div>
       {taxIncluded && <p className="mb-2 rounded-lg bg-amber-50 px-3 py-1.5 text-xs text-amber-700">税込で表示・入力中です。保存は税抜（÷1.1・四捨五入）で行います。</p>}
       {error && <p className="mb-2 rounded-lg bg-red-50 px-3 py-1.5 text-sm text-red-600">{error}</p>}
+      <div className="mb-2 flex flex-wrap items-center gap-2 rounded-xl border border-blue-100 bg-blue-50/60 px-3 py-2 text-xs text-gray-700">
+        <span className="font-bold">まとめて設定</span>
+        <span>チェック {selected.size}件</span>
+        <button onClick={() => setSelected(new Set(visible.map((product) => product.id)))} className="rounded-lg bg-white px-2.5 py-1.5 font-medium text-blue-700 shadow-sm">表示中をすべてチェック（{visible.length}件）</button>
+        <button onClick={() => setSelected(new Set())} disabled={selected.size === 0} className="rounded-lg bg-white px-2.5 py-1.5 text-gray-600 shadow-sm disabled:opacity-40">チェックを外す</button>
+        <span className="ml-auto flex items-center gap-2">
+          ジャンルを
+          <select value={bulkGenre} onChange={(event) => setBulkGenre(event.target.value)} className="rounded-lg border border-gray-200 bg-white px-2 py-1.5 text-base">
+            <option value="">選ぶ</option>
+            {genres.map((genre) => <option key={genre.id} value={genre.id}>{genre.name}</option>)}
+            <option value="none">未分類に戻す</option>
+          </select>
+          に
+          <button onClick={() => void applyBulkGenre()} disabled={bulkSaving || selected.size === 0 || bulkGenre === ''}
+            className="rounded-lg bg-blue-500 px-3 py-1.5 font-bold text-white disabled:opacity-40">{bulkSaving ? '設定中...' : 'まとめて設定'}</button>
+        </span>
+      </div>
+      {bulkMessage && <p className="mb-2 rounded-lg bg-green-50 px-3 py-1.5 text-sm text-green-700">{bulkMessage}</p>}
       <div className="max-h-[60vh] overflow-auto rounded-xl border border-gray-100">
-        <table className="w-full min-w-[680px] text-xs">
+        <table className="w-full min-w-[720px] text-xs">
           <thead className="sticky top-0 z-10 bg-gray-50 text-gray-500">
             <tr>
+              <th className="w-8 px-2 py-2 text-center">
+                <input type="checkbox" aria-label="表示中をすべて選択" className="h-4 w-4"
+                  checked={visible.length > 0 && visible.every((product) => selected.has(product.id))}
+                  onChange={(event) => setSelected(event.target.checked ? new Set(visible.map((product) => product.id)) : new Set())} />
+              </th>
               <th className="px-3 py-2 text-left">商品</th>
               <th className="w-24 px-2 py-2 text-center">区分</th>
               <th className="w-28 px-2 py-2 text-center">ジャンル</th>
@@ -232,10 +293,13 @@ export default function PriceTable({ categories }: { categories: Category[] }) {
               <Fragment key={product.id}>
               {product.category_id !== visible[index - 1]?.category_id && (
                 <tr>
-                  <td colSpan={5} className="sticky top-8 z-[5] bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-600">{categoryName.get(product.category_id)}</td>
+                  <td colSpan={6} className="sticky top-8 z-[5] bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-600">{categoryName.get(product.category_id)}</td>
                 </tr>
               )}
               <tr className="border-t border-gray-100">
+                <td className="px-2 py-1.5 text-center">
+                  <input type="checkbox" checked={selected.has(product.id)} onChange={() => toggle(product.id)} className="h-4 w-4" />
+                </td>
                 <td className="px-3 py-1.5">
                   <div className="text-[10px] text-gray-400">{categoryName.get(product.category_id)}・{product.brand}</div>
                   <div className="break-words font-medium text-gray-700">{product.name}</div>
