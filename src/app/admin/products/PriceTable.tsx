@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { fetchAll } from '@/lib/fetchAll'
 import { withTax, withoutTax } from '@/lib/tax'
@@ -17,6 +17,8 @@ type PriceProduct = {
   genre_id: number | null
 }
 type Genre = { id: number; name: string }
+type Store = { id: number; name: string }
+type Assignment = { store_id: number; product_id: number; sort_order: number }
 
 function normalizeSearch(value: string) {
   return value.normalize('NFKC').toLocaleLowerCase().replace(/\s+/g, '')
@@ -30,6 +32,9 @@ export default function PriceTable({ categories }: { categories: Category[] }) {
   const [onlyMissing, setOnlyMissing] = useState(false)
   const [onlyNoGenre, setOnlyNoGenre] = useState(false)
   const [genres, setGenres] = useState<Genre[]>([])
+  const [stores, setStores] = useState<Store[]>([])
+  const [assignments, setAssignments] = useState<Assignment[]>([])
+  const [storeView, setStoreView] = useState<string>('')
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [savingKey, setSavingKey] = useState('')
   const [error, setError] = useState('')
@@ -41,23 +46,49 @@ export default function PriceTable({ categories }: { categories: Category[] }) {
         .eq('is_active', true)
         .order('sort_order').order('id')
         .range(start, end))
-      const genreResult = await supabase.from('product_genres').select('id, name').order('sort_order').order('id')
-      if (loadError || genreResult.error) setError('商品を読み込めませんでした。')
+      const [genreResult, storeResult, assignmentResult] = await Promise.all([
+        supabase.from('product_genres').select('id, name').order('sort_order').order('id'),
+        supabase.from('stores').select('id, name').order('sort_order'),
+        fetchAll((start, end) => supabase.from('store_products').select('store_id, product_id, sort_order')
+          .eq('is_active', true).order('store_id').order('product_id').range(start, end)),
+      ])
+      if (loadError || genreResult.error || storeResult.error || assignmentResult.error) setError('商品を読み込めませんでした。')
       setProducts((data ?? []) as PriceProduct[])
       setGenres((genreResult.data ?? []) as Genre[])
+      const nextStores = (storeResult.data ?? []) as Store[]
+      setStores(nextStores)
+      setStoreView((current) => current || String(nextStores[0]?.id ?? 'all'))
+      setAssignments((assignmentResult.data ?? []) as Assignment[])
     })()
   }, [])
 
   const categoryOrder = useMemo(() => new Map(categories.map((category, index) => [category.id, index])), [categories])
+  // 並びは入荷・店舗入力と同じ：カテゴリ順 → その店舗の並び順。
+  // 「全店」は LABO→nit→elu の順に最初に取り扱っている店舗の並びを使う
+  const storeSort = useMemo(() => {
+    const storeIndex = new Map(stores.map((store, index) => [store.id, index]))
+    const map = new Map<number, { rank: number; sort: number }>()
+    assignments.forEach((row) => {
+      if (storeView !== 'all' && String(row.store_id) !== storeView) return
+      const rank = storeIndex.get(row.store_id) ?? 999
+      const current = map.get(row.product_id)
+      if (!current || rank < current.rank) map.set(row.product_id, { rank, sort: row.sort_order })
+    })
+    return map
+  }, [assignments, storeView, stores])
   const visible = useMemo(() => {
     const keyword = normalizeSearch(search)
     return products
+      .filter((product) => storeView === 'all' || storeSort.has(product.id))
       .filter((product) => categoryId === 'all' || product.category_id === categoryId)
       .filter((product) => !keyword || normalizeSearch(`${product.brand ?? ''}${product.name}`).includes(keyword))
       .filter((product) => !onlyMissing || product.cost_price === null || (product.product_type === 'retail' && product.sale_price === null))
       .filter((product) => !onlyNoGenre || product.genre_id === null)
-      .sort((a, b) => (categoryOrder.get(a.category_id) ?? 999) - (categoryOrder.get(b.category_id) ?? 999))
-  }, [categoryId, categoryOrder, onlyMissing, onlyNoGenre, products, search])
+      .sort((a, b) => (categoryOrder.get(a.category_id) ?? 999) - (categoryOrder.get(b.category_id) ?? 999)
+        || (storeSort.get(a.id)?.rank ?? 999) - (storeSort.get(b.id)?.rank ?? 999)
+        || (storeSort.get(a.id)?.sort ?? Number.MAX_SAFE_INTEGER) - (storeSort.get(b.id)?.sort ?? Number.MAX_SAFE_INTEGER)
+        || a.id - b.id)
+  }, [categoryId, categoryOrder, onlyMissing, onlyNoGenre, products, search, storeSort, storeView])
   const noGenreCount = products.filter((product) => product.genre_id === null).length
 
   async function saveGenre(product: PriceProduct, value: string) {
@@ -133,6 +164,15 @@ export default function PriceTable({ categories }: { categories: Category[] }) {
           <button onClick={() => { setTaxIncluded(true); setDrafts({}) }} className={`rounded-md px-3 py-1.5 ${taxIncluded ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500'}`}>税込</button>
         </div>
       </div>
+      <div className="mb-2 flex gap-1 overflow-x-auto">
+        {stores.map((store) => (
+          <button key={store.id} onClick={() => setStoreView(String(store.id))}
+            className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-bold ${storeView === String(store.id) ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-600'}`}>{store.name}の並び</button>
+        ))}
+        <button onClick={() => setStoreView('all')}
+          className={`shrink-0 rounded-full px-3 py-1.5 text-xs font-bold ${storeView === 'all' ? 'bg-blue-500 text-white' : 'bg-gray-100 text-gray-600'}`}>全商品</button>
+      </div>
+      <p className="mb-2 text-[11px] text-gray-400">{storeView === 'all' ? '全店の商品を表示（LABO→nit→elu の並びを優先）' : 'この店舗の取扱商品を、入荷・店舗入力と同じ並びで表示'}。価格は全店共通です。</p>
       <div className="mb-3 grid gap-2 sm:grid-cols-4">
         <select value={categoryId} onChange={(event) => setCategoryId(event.target.value === 'all' ? 'all' : Number(event.target.value))}
           className="rounded-xl border border-gray-200 bg-white px-3 py-2 text-base">
@@ -164,8 +204,14 @@ export default function PriceTable({ categories }: { categories: Category[] }) {
             </tr>
           </thead>
           <tbody>
-            {visible.map((product) => (
-              <tr key={product.id} className="border-t border-gray-100">
+            {visible.map((product, index) => (
+              <Fragment key={product.id}>
+              {product.category_id !== visible[index - 1]?.category_id && (
+                <tr>
+                  <td colSpan={5} className="sticky top-8 z-[5] bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-600">{categoryName.get(product.category_id)}</td>
+                </tr>
+              )}
+              <tr className="border-t border-gray-100">
                 <td className="px-3 py-1.5">
                   <div className="text-[10px] text-gray-400">{categoryName.get(product.category_id)}・{product.brand}</div>
                   <div className="break-words font-medium text-gray-700">{product.name}</div>
@@ -199,6 +245,7 @@ export default function PriceTable({ categories }: { categories: Category[] }) {
                   )
                 })}
               </tr>
+              </Fragment>
             ))}
           </tbody>
         </table>
