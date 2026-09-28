@@ -309,38 +309,87 @@ export default function ReportPage() {
         </section>
 
         <section className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
-          <h2 className="mb-1 font-bold text-gray-800">材料費の内訳（ジャンル別）</h2>
-          <p className="mb-3 text-xs text-gray-400">ジャンルは商品管理の「価格をまとめて入力」で商品ごとに設定、ジャンルの追加・名称変更・削除は「整理」の「ジャンル」タブから</p>
-          <div className="overflow-x-auto">
-            <table className="w-max min-w-full text-sm">
-              <thead className="bg-gray-50 text-xs text-gray-500">
-                <tr>
-                  <th className="px-3 py-2 text-left">店舗</th>
-                  {genres.map((genre) => <th key={genre.id} className="px-3 py-2 text-right">{genre.name}</th>)}
-                  <th className="px-3 py-2 text-right text-amber-600">未分類</th>
-                  <th className="px-3 py-2 text-right">材料費 合計</th>
-                </tr>
-              </thead>
-              <tbody>
-                {[...stores.map((store) => ({ key: String(store.id), name: store.name, ids: [store.id] })), { key: 'total', name: '全店合計', ids: stores.map((store) => store.id) }].map(({ key, name, ids }) => {
-                  const cell = (genreId: number) => ids.reduce((sum, id) => sum + (byGenre.get(`${id}_${genreId}`) ?? 0), 0)
-                  const unassigned = cell(0)
-                  const totalMaterial = ids.reduce((sum, id) => sum + (byStore.get(id)?.material ?? 0), 0)
-                  return (
-                    <tr key={key} className={`border-t border-gray-100 ${key === 'total' ? 'bg-gray-50 font-bold' : ''}`}>
-                      <td className="px-3 py-2 font-bold text-gray-700">{name}</td>
-                      {genres.map((genre) => {
-                        const amount = cell(genre.id)
-                        return <td key={genre.id} className={`px-3 py-2 text-right ${amount < 0 ? 'text-red-600' : ''}`}>{amount === 0 ? '−' : money(amount)}</td>
-                      })}
-                      <td className={`px-3 py-2 text-right ${unassigned !== 0 ? 'text-amber-600' : ''}`}>{unassigned === 0 ? '−' : money(unassigned)}</td>
-                      <td className="px-3 py-2 text-right font-bold">{money(totalMaterial)}</td>
-                    </tr>
-                  )
-                })}
-              </tbody>
-            </table>
-          </div>
+          <h2 className="mb-1 font-bold text-gray-800">材料費（ジャンル別）</h2>
+          <p className="mb-3 text-xs text-gray-400">金額の下の％は、その店舗の施術売上に対する割合です。ジャンルは商品管理の「価格をまとめて入力」で設定します</p>
+          {(() => {
+            const columns = [...stores.map((store) => ({ key: String(store.id), name: store.name, ids: [store.id] })), { key: 'total', name: '全店', ids: stores.map((store) => store.id) }]
+            const treatmentOf = (ids: number[]) => {
+              const values = ids.map((id) => salesMap.get(id)?.treatment_sales).filter((value): value is number => value != null)
+              return values.length === ids.length ? values.reduce((sum, value) => sum + value, 0) : null
+            }
+            const genreRows = [...genres.map((genre) => ({ key: String(genre.id), id: genre.id, name: genre.name })), { key: 'none', id: 0, name: '未分類' }]
+            const amountOf = (genreId: number, ids: number[]) => ids.reduce((sum, id) => sum + (byGenre.get(`${id}_${genreId}`) ?? 0), 0)
+            const materialOf = (ids: number[]) => ids.reduce((sum, id) => sum + (byStore.get(id)?.material ?? 0), 0)
+            const sourceOf = (field: 'purchase' | 'transfer' | 'usageOnly' | 'retailBusiness', ids: number[]) => ids.reduce((sum, id) => sum + (byStore.get(id)?.[field] ?? 0), 0)
+            const amountCell = (amount: number, ids: number[], strong = false) => {
+              const sales = treatmentOf(ids)
+              return (
+                <>
+                  <div className={`${strong ? 'font-bold' : 'font-medium'} ${amount < 0 ? 'text-red-600' : amount === 0 ? 'text-gray-300' : 'text-gray-800'}`}>{amount === 0 ? '−' : money(amount)}</div>
+                  {amount !== 0 && <div className="text-[11px] text-blue-600">{rate(amount, sales)}</div>}
+                </>
+              )
+            }
+            return (
+              <>
+                <div className="overflow-x-auto">
+                  <table className="w-max min-w-full text-sm">
+                    <thead className="bg-gray-50 text-xs text-gray-500">
+                      <tr>
+                        <th className="px-3 py-2 text-left">ジャンル</th>
+                        {columns.map((column) => <th key={column.key} className={`px-3 py-2 text-right ${column.key === 'total' ? 'bg-gray-100 text-gray-700' : ''}`}>{column.name}</th>)}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {genreRows.map((genre) => (
+                        <tr key={genre.key} className="border-t border-gray-100">
+                          <td className={`px-3 py-2 font-bold ${genre.id === 0 ? 'text-amber-600' : 'text-gray-700'}`}>{genre.name}</td>
+                          {columns.map((column) => (
+                            <td key={column.key} className={`px-3 py-2 text-right ${column.key === 'total' ? 'bg-gray-50' : ''}`}>{amountCell(amountOf(genre.id, column.ids), column.ids)}</td>
+                          ))}
+                        </tr>
+                      ))}
+                      <tr className="border-t-2 border-gray-300 bg-gray-50">
+                        <td className="px-3 py-2 font-bold text-gray-800">材料費 合計</td>
+                        {columns.map((column) => (
+                          <td key={column.key} className={`px-3 py-2 text-right ${column.key === 'total' ? 'bg-gray-100' : ''}`}>{amountCell(materialOf(column.ids), column.ids, true)}</td>
+                        ))}
+                      </tr>
+                    </tbody>
+                  </table>
+                </div>
+
+                <h3 className="mb-1 mt-5 text-sm font-bold text-gray-700">どこから来た材料費か</h3>
+                <p className="mb-2 text-[11px] text-gray-400">業務用は仕入れた分（店舗間移動は移動先へ付け替え）、発注しない商品と店販商品は使った分</p>
+                <div className="overflow-x-auto">
+                  <table className="w-max min-w-full text-xs">
+                    <thead className="bg-gray-50 text-gray-500">
+                      <tr>
+                        <th className="px-3 py-1.5 text-left">内訳</th>
+                        {columns.map((column) => <th key={column.key} className={`px-3 py-1.5 text-right ${column.key === 'total' ? 'bg-gray-100 text-gray-700' : ''}`}>{column.name}</th>)}
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {([
+                        ['purchase', '業務用の入荷'],
+                        ['transfer', '店舗間移動'],
+                        ['usageOnly', '発注しない商品の使用'],
+                        ['retailBusiness', '店販商品の業務使用'],
+                      ] as const).map(([field, label]) => (
+                        <tr key={field} className="border-t border-gray-100">
+                          <td className="px-3 py-1.5 text-gray-600">{label}</td>
+                          {columns.map((column) => {
+                            const amount = sourceOf(field, column.ids)
+                            return <td key={column.key} className={`px-3 py-1.5 text-right ${column.key === 'total' ? 'bg-gray-50' : ''} ${amount < 0 ? 'text-red-600' : amount === 0 ? 'text-gray-300' : 'text-gray-700'}`}>{amount === 0 ? '−' : money(amount)}</td>
+                          })}
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </>
+            )
+          })()}
         </section>
       </div>
     </main>
