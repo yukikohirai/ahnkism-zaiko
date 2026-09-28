@@ -33,6 +33,8 @@ export type OrderLine = {
   quantity: number
   regular_price: number | null
   unit_price: number | null
+  line_discount_type?: DiscountType | null
+  line_discount_value?: number | null
 }
 
 export type PresaleOrder = {
@@ -74,15 +76,21 @@ export function discountLabel(type: DiscountType, value: number) {
 
 // 予約1件の金額（画面の見積もり用。保存時はデータベース側で同じ計算をして確定する）
 // まとめ買い対象の合計個数で段階を決め、到達していれば対象商品は全部その％に置き換える
-export function priceOrder(lines: { product_id: number; quantity: number }[], items: Map<number, PresaleItemWithProduct>, tiers: BulkTier[]) {
+// 優先順：その行だけの割引 → まとめ買い（対象外の商品は除く） → 商品ごとの割引
+export function priceOrder(
+  lines: { product_id: number; quantity: number; discount_type?: DiscountType | null; discount_value?: number | null }[],
+  items: Map<number, PresaleItemWithProduct>,
+  tiers: BulkTier[],
+) {
   const count = lines.reduce((sum, line) => sum + (items.get(line.product_id)?.bulk_excluded ? 0 : line.quantity), 0)
   const tier = [...tiers].sort((a, b) => b.min_qty - a.min_qty).find((item) => count >= item.min_qty)
   const priced = lines.map((line) => {
     const item = items.get(line.product_id)
     const regular = item ? regularPriceWithTax(item.sale_price) : null
     const unit = !item || regular === null ? null
-      : tier && !item.bulk_excluded ? Math.round(regular * (1 - Number(tier.percent) / 100))
-        : discountedPrice(regular, item.discount_type, Number(item.discount_value))
+      : line.discount_type ? discountedPrice(regular, line.discount_type, Number(line.discount_value ?? 0))
+        : tier && !item.bulk_excluded ? Math.round(regular * (1 - Number(tier.percent) / 100))
+          : discountedPrice(regular, item.discount_type, Number(item.discount_value))
     return { ...line, regular_price: regular, unit_price: unit }
   })
   return {

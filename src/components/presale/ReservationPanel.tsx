@@ -10,7 +10,7 @@ import {
 } from '@/lib/presale'
 
 type Store = { id: number; name: string }
-type DraftLine = { product_id: string; quantity: string }
+type DraftLine = { product_id: string; quantity: string; discount_type: '' | 'percent' | 'yen'; discount_value: string }
 type Draft = {
   id: string | null
   store_id: number | null
@@ -22,7 +22,7 @@ type Draft = {
 }
 
 function emptyDraft(storeId: number | null): Draft {
-  return { id: null, store_id: storeId, reserved_on: todayInTokyo(), customer_name: '', stylist_id: '', staff_id: '', lines: [{ product_id: '', quantity: '1' }] }
+  return { id: null, store_id: storeId, reserved_on: todayInTokyo(), customer_name: '', stylist_id: '', staff_id: '', lines: [{ product_id: '', quantity: '1', discount_type: '', discount_value: '' }] }
 }
 
 function normalize(value: string) {
@@ -107,7 +107,12 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
 
   const draftLines = draft.lines
     .filter((line) => line.product_id && parseInt(line.quantity, 10) > 0)
-    .map((line) => ({ product_id: Number(line.product_id), quantity: parseInt(line.quantity, 10) }))
+    .map((line) => ({
+      product_id: Number(line.product_id),
+      quantity: parseInt(line.quantity, 10),
+      discount_type: line.discount_type || null,
+      discount_value: line.discount_type ? Number(line.discount_value || 0) : null,
+    }))
   const estimate = priceOrder(draftLines, itemMap, tiers)
   const sortedTiers = [...tiers].sort((a, b) => a.min_qty - b.min_qty)
   const nextTier = sortedTiers.find((tier) => tier.min_qty > estimate.count)
@@ -124,7 +129,12 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
       customer_name: order.customer_name,
       stylist_id: order.stylist_id ? String(order.stylist_id) : '',
       staff_id: order.staff_id ? String(order.staff_id) : '',
-      lines: order.lines.map((line) => ({ product_id: String(line.product_id), quantity: String(line.quantity) })),
+      lines: order.lines.map((line) => ({
+        product_id: String(line.product_id),
+        quantity: String(line.quantity),
+        discount_type: line.line_discount_type ?? '',
+        discount_value: line.line_discount_value != null ? String(line.line_discount_value) : '',
+      })),
     })
     setMessage('')
     setError('')
@@ -268,7 +278,8 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
         <div className="mt-4 space-y-2">
           <div className="text-xs font-medium text-gray-500">商品と数量</div>
           {draft.lines.map((line, index) => {
-            const priced = estimate.lines.find((item) => String(item.product_id) === line.product_id)
+            const pricedIndex = draft.lines.slice(0, index).filter((item) => item.product_id && parseInt(item.quantity, 10) > 0).length
+            const priced = line.product_id && parseInt(line.quantity, 10) > 0 ? estimate.lines[pricedIndex] : undefined
             const item = line.product_id ? itemMap.get(Number(line.product_id)) : undefined
             return (
               <div key={index} className="rounded-xl border border-gray-100 bg-gray-50 p-2">
@@ -282,14 +293,33 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
                   </select>
                   <input inputMode="numeric" value={line.quantity} onChange={(event) => setLine(index, { quantity: event.target.value })}
                     className="w-16 rounded-lg border border-gray-200 bg-white px-2 py-2 text-center text-base font-bold" />
-                  <button onClick={() => setDraft((previous) => ({ ...previous, lines: previous.lines.length > 1 ? previous.lines.filter((_, i) => i !== index) : [{ product_id: '', quantity: '1' }] }))}
+                  <button onClick={() => setDraft((previous) => ({ ...previous, lines: previous.lines.length > 1 ? previous.lines.filter((_, i) => i !== index) : [{ product_id: '', quantity: '1', discount_type: '', discount_value: '' }] }))}
                     className="shrink-0 rounded-lg px-2 text-lg text-gray-400" aria-label="この行を削除">×</button>
                 </div>
+                {item && (
+                  <div className="mt-1 flex flex-wrap items-center gap-1.5 px-1 text-xs">
+                    <span className="text-gray-400">この行だけの割引</span>
+                    <div className="flex rounded-md bg-white p-0.5 shadow-sm">
+                      {(['', 'percent', 'yen'] as const).map((type) => (
+                        <button key={type || 'none'} onClick={() => setLine(index, { discount_type: type, discount_value: type ? line.discount_value : '' })}
+                          className={`rounded px-2 py-0.5 font-bold ${line.discount_type === type ? 'bg-pink-500 text-white' : 'text-gray-500'}`}>
+                          {type === '' ? 'なし' : type === 'percent' ? '%' : '円'}
+                        </button>
+                      ))}
+                    </div>
+                    {line.discount_type && (
+                      <input inputMode="decimal" value={line.discount_value} onChange={(event) => setLine(index, { discount_value: event.target.value })}
+                        placeholder="0" className="w-16 rounded-md border border-pink-200 bg-white px-1.5 py-0.5 text-right text-base" />
+                    )}
+                    {line.discount_type && <span className="text-gray-500">{line.discount_type === 'percent' ? '%オフ' : '円引き'}</span>}
+                  </div>
+                )}
                 {item && (
                   <div className="mt-1 flex flex-wrap items-center justify-between gap-2 px-1 text-xs">
                     <span className="text-gray-500">
                       通常 {yen(regularPriceWithTax(item.sale_price))}・{item.bulk_excluded ? '美容機器（まとめ買い対象外）・' : ''}
-                      {estimate.percent !== null && !item.bulk_excluded ? `まとめ買い${estimate.percent}%オフ` : discountLabel(item.discount_type, Number(item.discount_value))}
+                      {line.discount_type ? `この行だけ${discountLabel(line.discount_type, Number(line.discount_value || 0))}`
+                        : estimate.percent !== null && !item.bulk_excluded ? `まとめ買い${estimate.percent}%オフ` : discountLabel(item.discount_type, Number(item.discount_value))}
                     </span>
                     <span className="font-bold text-blue-700">{priced ? `${yen(priced.unit_price)} × ${priced.quantity} ＝ ${yen((priced.unit_price ?? 0) * priced.quantity)}` : ''}</span>
                   </div>
@@ -297,7 +327,7 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
               </div>
             )
           })}
-          <button onClick={() => setDraft((previous) => ({ ...previous, lines: [...previous.lines, { product_id: '', quantity: '1' }] }))}
+          <button onClick={() => setDraft((previous) => ({ ...previous, lines: [...previous.lines, { product_id: '', quantity: '1', discount_type: '', discount_value: '' }] }))}
             className="w-full rounded-xl border border-dashed border-gray-300 py-2 text-sm text-gray-600">＋ 商品を追加</button>
         </div>
 
@@ -387,6 +417,7 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
                         <li key={line.id ?? line.product_id} className="break-words">
                           {item ? `${item.brand ? `${item.brand} ` : ''}${item.name}` : '（対象外になった商品）'} × {line.quantity}
                           <span className="ml-1 text-xs text-gray-500">{yen(line.unit_price)}</span>
+                          {line.line_discount_type && <span className="ml-1 rounded bg-amber-100 px-1 text-[10px] text-amber-700">個別{discountLabel(line.line_discount_type, Number(line.line_discount_value ?? 0))}</span>}
                         </li>
                       )
                     })}
