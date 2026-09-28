@@ -11,7 +11,7 @@ function normalize(value: string) {
 }
 
 // 月次レポートの材料費ジャンル（カラー・ストレート…）の追加・名称変更・削除
-export default function GenreManager() {
+export default function GenreManager({ onChanged }: { onChanged?: () => void } = {}) {
   const [genres, setGenres] = useState<Genre[]>([])
   const [newName, setNewName] = useState('')
   const [editingId, setEditingId] = useState<number | null>(null)
@@ -32,6 +32,12 @@ export default function GenreManager() {
     setGenres((genreResult.data ?? []).map((genre) => ({ ...genre, count: counts.get(genre.id) ?? 0 })))
   }, [])
 
+  // 追加・名称変更・削除・並び替えのあとだけ呼び出し元へ知らせる
+  const refresh = useCallback(async () => {
+    await load()
+    onChanged?.()
+  }, [load, onChanged])
+
   useEffect(() => { void load() }, [load])
 
   function duplicateOf(name: string, exceptId?: number) {
@@ -50,7 +56,7 @@ export default function GenreManager() {
     if (insertError) { setError(insertError.message); return }
     setNewName('')
     setMessage(`ジャンル「${trimmed}」を追加しました。`)
-    await load()
+    await refresh()
   }
 
   async function rename(genre: Genre) {
@@ -64,7 +70,7 @@ export default function GenreManager() {
     if (updateError) { setError(updateError.message); return }
     setEditingId(null)
     setMessage(`「${genre.name}」を「${trimmed}」に変更しました。`)
-    await load()
+    await refresh()
   }
 
   async function remove(genre: Genre) {
@@ -75,7 +81,7 @@ export default function GenreManager() {
     setSaving(false)
     if (deleteError) { setError(deleteError.message); return }
     setMessage(`「${genre.name}」を削除しました。`)
-    await load()
+    await refresh()
   }
 
   async function move(index: number, delta: number) {
@@ -88,7 +94,7 @@ export default function GenreManager() {
     setSaving(false)
     const failed = results.find((result) => result.error)
     if (failed?.error) { setError(failed.error.message); return }
-    await load()
+    await refresh()
   }
 
   return (

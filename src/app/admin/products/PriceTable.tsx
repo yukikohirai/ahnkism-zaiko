@@ -1,8 +1,9 @@
 'use client'
 
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { fetchAll } from '@/lib/fetchAll'
+import GenreManager from './GenreManager'
 import { withTax, withoutTax } from '@/lib/tax'
 
 type Category = { id: number; name: string }
@@ -35,6 +36,20 @@ export default function PriceTable({ categories }: { categories: Category[] }) {
   const [stores, setStores] = useState<Store[]>([])
   const [assignments, setAssignments] = useState<Assignment[]>([])
   const [storeView, setStoreView] = useState<string>('')
+  const [showGenres, setShowGenres] = useState(false)
+
+  // ジャンルを追加・名称変更・削除したら、表の選択肢と商品の割り当てを読み直す
+  const reloadGenres = useCallback(async () => {
+    const [genreResult, productResult] = await Promise.all([
+      supabase.from('product_genres').select('id, name').order('sort_order').order('id'),
+      fetchAll((start, end) => supabase.from('products').select('id, genre_id').eq('is_active', true).order('id').range(start, end)),
+    ])
+    if (genreResult.data) setGenres(genreResult.data as Genre[])
+    if (productResult.data) {
+      const genreById = new Map((productResult.data as { id: number; genre_id: number | null }[]).map((row) => [row.id, row.genre_id]))
+      setProducts((previous) => previous.map((item) => genreById.has(item.id) ? { ...item, genre_id: genreById.get(item.id) ?? null } : item))
+    }
+  }, [])
   const [drafts, setDrafts] = useState<Record<string, string>>({})
   const [savingKey, setSavingKey] = useState('')
   const [error, setError] = useState('')
@@ -163,6 +178,15 @@ export default function PriceTable({ categories }: { categories: Category[] }) {
           <button onClick={() => { setTaxIncluded(false); setDrafts({}) }} className={`rounded-md px-3 py-1.5 ${!taxIncluded ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500'}`}>税抜</button>
           <button onClick={() => { setTaxIncluded(true); setDrafts({}) }} className={`rounded-md px-3 py-1.5 ${taxIncluded ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500'}`}>税込</button>
         </div>
+      </div>
+      <div className="mb-3 rounded-xl border border-slate-200 bg-slate-50 p-3">
+        <div className="flex items-center justify-between gap-2">
+          <span className="text-xs text-gray-600">ジャンル：{genres.map((genre) => genre.name).join('・') || 'なし'}</span>
+          <button onClick={() => setShowGenres((value) => !value)} className="shrink-0 rounded-lg bg-white px-3 py-1.5 text-xs font-bold text-slate-700 shadow-sm">
+            {showGenres ? '閉じる' : 'ジャンルの追加・編集・削除'}
+          </button>
+        </div>
+        {showGenres && <div className="mt-3"><GenreManager onChanged={reloadGenres} /></div>}
       </div>
       <div className="mb-2 flex gap-1 overflow-x-auto">
         {stores.map((store) => (
