@@ -47,6 +47,22 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
     })
   }, [])
 
+  // 締めた月の日付のままの下書きは、締めていない最初の日（例：9月を締めたら10/1）に移す
+  useEffect(() => {
+    if (!minDate || !session || completed || session.status !== 'draft' || session.entry_date >= minDate) return
+    const sessionId = session.id
+    void supabase.from('inventory_sessions')
+      .update({ entry_date: minDate, updated_at: new Date().toISOString() })
+      .eq('id', sessionId)
+      .select('*')
+      .single()
+      .then(({ data, error }) => {
+        if (error || !data) { setSaveError('入力日を締めていない日付に変えられませんでした。画面を再読み込みしてください。'); return }
+        setSession(data as InventorySession)
+        setDate(minDate)
+      })
+  }, [completed, minDate, session])
+
   useEffect(() => {
     void authorize()
   }, [storeId])
