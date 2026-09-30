@@ -32,6 +32,7 @@ type Tab = 'entry' | 'summary' | 'cash'
 
 // スタッフ購入は2026年10月から
 const START_DATE = '2026-10-01'
+const PAGE_SIZE = 20
 const KIND_LABEL: Record<Kind, string> = { store_stock: '店舗在庫から', personal_order: '個人発注' }
 const BOX_LABEL = { safe: '金庫（オーナー渡し用）', dealer: 'ディーラー支払い用' }
 
@@ -342,6 +343,12 @@ export default function StaffPurchasesPage() {
   }, [payouts, purchases])
   const listTotal = listRows.reduce((sum, row) => sum + row.quantity * row.unit_price, 0)
   const listUnpaid = listRows.filter((row) => !row.collected_on).reduce((sum, row) => sum + row.quantity * row.unit_price, 0)
+  // 一覧は20件ずつ。絞り込みを変えたら1ページ目に戻す
+  const [listPage, setListPage] = useState(1)
+  useEffect(() => { setListPage(1) }, [listDealer, listFrom, listKind, listStaff, listTo, onlyUnpaid])
+  const pageCount = Math.max(1, Math.ceil(listRows.length / PAGE_SIZE))
+  const currentPage = Math.min(listPage, pageCount)
+  const pageRows = listRows.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
 
   const summary = useMemo(() => {
     if (sumStaff === null) return null
@@ -571,7 +578,7 @@ export default function StaffPurchasesPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {listRows.map((row) => {
+                    {pageRows.map((row) => {
                       const editing = editingId === row.id
                       return (
                         <tr key={row.id} className={row.collected_on ? '' : 'bg-amber-50/40'}>
@@ -619,6 +626,15 @@ export default function StaffPurchasesPage() {
                   </tbody>
                 </table>
                 {listRows.length === 0 && <p className="py-6 text-center text-sm text-gray-400">この条件の記録はありません</p>}
+                {pageCount > 1 && (
+                  <div className="mt-3 flex items-center justify-center gap-3 text-sm">
+                    <button onClick={() => setListPage(currentPage - 1)} disabled={currentPage <= 1}
+                      className="rounded-lg border border-gray-300 px-4 py-2 font-bold text-gray-700 disabled:opacity-30">‹ 前へ</button>
+                    <span className="text-gray-600">{currentPage} / {pageCount} ページ（{(currentPage - 1) * PAGE_SIZE + 1}〜{Math.min(currentPage * PAGE_SIZE, listRows.length)}件目）</span>
+                    <button onClick={() => setListPage(currentPage + 1)} disabled={currentPage >= pageCount}
+                      className="rounded-lg border border-gray-300 px-4 py-2 font-bold text-gray-700 disabled:opacity-30">次へ ›</button>
+                  </div>
+                )}
               </div>
             </section>
           </>
