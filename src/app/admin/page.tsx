@@ -938,6 +938,7 @@ export default function AdminPage() {
           <Link href="/admin/products" className="rounded bg-purple-50 px-2 py-1 text-xs font-medium text-purple-700 shrink-0">商品管理</Link>
           <Link href="/admin/orders" className="rounded bg-orange-50 px-2 py-1 text-xs font-medium text-orange-700 shrink-0">発注リスト</Link>
           <Link href="/admin/presale" className="rounded bg-pink-50 px-2 py-1 text-xs font-medium text-pink-700 shrink-0">先行予約</Link>
+          <Link href="/admin/staff-purchases" className="rounded bg-teal-50 px-2 py-1 text-xs font-medium text-teal-700 shrink-0">スタッフ購入</Link>
           <Link href="/admin/monthly" className="rounded bg-yellow-50 px-2 py-1 text-xs font-medium text-yellow-700 shrink-0">月別まとめ</Link>
           <Link href="/admin/report" className="rounded bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 shrink-0">月次レポート</Link>
           <Link href="/admin/closing" className="rounded bg-gray-800 px-2 py-1 text-xs font-medium text-white shrink-0">月締め</Link>
