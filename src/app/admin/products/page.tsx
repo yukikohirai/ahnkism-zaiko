@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import PriceTable from './PriceTable'
 import MasterManager from './MasterManager'
+import ProductMerge from './ProductMerge'
 import { useCallback, useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { getCurrentProfile } from '@/lib/auth'
@@ -56,6 +57,7 @@ export default function ProductManagementPage() {
   const [editUsageOnly, setEditUsageOnly] = useState(false)
   const [showPrices, setShowPrices] = useState(false)
   const [showMasters, setShowMasters] = useState(false)
+  const [showMerge, setShowMerge] = useState(false)
   const [newCategory, setNewCategory] = useState('')
   const [sortStoreId, setSortStoreId] = useState<number | null>(null)
   const [sortCategoryId, setSortCategoryId] = useState<number | null>(null)
@@ -411,6 +413,11 @@ export default function ProductManagementPage() {
           {showMasters ? '整理を閉じる' : '発注先・メーカー・ブランド・カテゴリ・ジャンルを整理'}
         </button>
         {showMasters && <MasterManager products={products} categories={categories} onChanged={loadData} />}
+
+        <button onClick={() => setShowMerge((value) => !value)} className="mb-3 w-full rounded-xl border border-slate-300 bg-slate-50 py-3 font-bold text-slate-700">
+          {showMerge ? '統合を閉じる' : '重複した商品を統合（在庫はそのまま合算）'}
+        </button>
+        {showMerge && <ProductMerge products={products} stores={stores} onChanged={loadData} />}
 
         <button onClick={() => { setShowForm((value) => !value); setError(''); setMessage('') }} className="mb-3 w-full rounded-xl bg-blue-500 py-3 font-bold text-white">
           {showForm ? '追加フォームを閉じる' : '＋ 新しい商品を追加'}
