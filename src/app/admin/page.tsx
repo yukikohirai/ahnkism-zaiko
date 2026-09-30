@@ -941,29 +941,29 @@ export default function AdminPage() {
   return (
     <div className="min-h-[100dvh] bg-gray-50">
       {/* ヘッダー：よく使うものほど左に大きく、たまに使うものは右に小さく */}
-      <div className="bg-white border-b sticky top-0 z-20 shadow-sm">
-        <div className="px-4 py-2.5 flex items-center gap-4 flex-wrap">
-          <div className="flex items-baseline gap-2 shrink-0">
-            <h1 className="text-base font-bold text-gray-800">管理</h1>
-            <Link href="/" className="text-xs text-blue-500">← 入力</Link>
+      <div className="bg-white border-b-2 border-gray-200 sticky top-0 z-20 shadow-sm">
+        <div className="px-5 py-3 flex items-center gap-x-5 gap-y-2 flex-wrap">
+          <div className="flex items-baseline gap-3 shrink-0">
+            <h1 className="text-xl font-bold text-gray-900">管理</h1>
+            <Link href="/" className="text-sm font-medium text-blue-600 hover:underline">← 入力</Link>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
-            <div className="flex overflow-hidden rounded-lg border border-blue-200">
-              <Link href="/admin/operations" className="bg-blue-50 px-4 py-2 text-sm font-bold text-blue-700 hover:bg-blue-100">入出庫</Link>
-              <Link href="/admin/orders" className="border-l border-blue-200 bg-blue-50 px-4 py-2 text-sm font-bold text-blue-700 hover:bg-blue-100">発注リスト</Link>
+          <div className="flex items-center gap-3 shrink-0">
+            <div className="flex overflow-hidden rounded-xl shadow-sm">
+              <Link href="/admin/operations" className="bg-blue-600 px-6 py-3 text-base font-bold text-white hover:bg-blue-700">入出庫</Link>
+              <Link href="/admin/orders" className="border-l border-blue-400 bg-blue-600 px-6 py-3 text-base font-bold text-white hover:bg-blue-700">発注リスト</Link>
             </div>
-            <Link href="/admin/products" className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-bold text-gray-700 hover:bg-gray-50">商品管理</Link>
-            <Link href="/admin/staff-purchases" className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50">スタッフ購入</Link>
+            <Link href="/admin/products" className="rounded-xl border-2 border-gray-800 bg-white px-6 py-2.5 text-base font-bold text-gray-900 hover:bg-gray-50">商品管理</Link>
+            <Link href="/admin/staff-purchases" className="rounded-xl border-2 border-gray-300 bg-white px-4 py-2 text-sm font-bold text-gray-700 hover:bg-gray-50">スタッフ購入</Link>
             {presaleOpen && (
-              <Link href="/admin/presale" className="rounded-lg border border-pink-200 bg-pink-50 px-3 py-1.5 text-xs font-medium text-pink-700 hover:bg-pink-100">先行予約（受付中）</Link>
+              <Link href="/admin/presale" className="rounded-xl border-2 border-pink-300 bg-pink-50 px-4 py-2 text-sm font-bold text-pink-700 hover:bg-pink-100">先行予約（受付中）</Link>
             )}
           </div>
-          <div className="ml-auto flex items-center gap-3 text-xs text-gray-500 shrink-0">
-            <Link href="/admin/monthly" className="hover:text-gray-800 hover:underline">月別まとめ</Link>
-            <Link href="/admin/report" className="hover:text-gray-800 hover:underline">月次レポート</Link>
-            {!presaleOpen && <Link href="/admin/presale" className="hover:text-gray-800 hover:underline">先行予約</Link>}
-            <span className="h-4 w-px bg-gray-300" aria-hidden="true" />
-            <Link href="/admin/closing" className="rounded border border-gray-300 px-2.5 py-1 font-medium text-gray-700 hover:bg-gray-50">🔒 月締め</Link>
+          <div className="ml-auto flex items-center gap-4 text-sm font-medium text-gray-600 shrink-0">
+            <Link href="/admin/monthly" className="hover:text-gray-900 hover:underline">月別まとめ</Link>
+            <Link href="/admin/report" className="hover:text-gray-900 hover:underline">月次レポート</Link>
+            {!presaleOpen && <Link href="/admin/presale" className="hover:text-gray-900 hover:underline">先行予約</Link>}
+            <span className="h-5 w-px bg-gray-300" aria-hidden="true" />
+            <Link href="/admin/closing" className="rounded-lg border border-gray-400 px-3 py-1.5 font-bold text-gray-800 hover:bg-gray-50">🔒 月締め</Link>
           </div>
         </div>
       </div>
