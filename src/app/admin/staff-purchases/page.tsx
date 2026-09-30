@@ -474,11 +474,11 @@ export default function StaffPurchasesPage() {
 
       <div className="mx-auto max-w-5xl space-y-4 p-4">
         <div className="grid gap-3 sm:grid-cols-3">
-          <div className={`rounded-2xl border p-4 shadow-sm ${overThreshold ? 'border-red-300 bg-red-50' : 'border-gray-200 bg-white'}`}>
+          <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
             <p className="text-xs text-gray-500">金庫（オーナー渡し用）の残高</p>
-            <p className={`text-2xl font-bold ${overThreshold ? 'text-red-600' : 'text-gray-800'}`}>{yen(balances.safe)}</p>
+            <p className="text-2xl font-bold text-gray-800">{yen(balances.safe)}</p>
             <p className="mt-1 text-[11px] text-gray-400">開始 {yen(balances.safeOpen)} ＋ 集金 {yen(balances.safeIn)} − 渡した {yen(balances.safeOut)}</p>
-            {overThreshold && <p className="mt-1 text-xs font-bold text-red-600">目安 {yen(threshold)} を超えています。オーナーに渡してください</p>}
+            {overThreshold && <p className="mt-1 text-xs text-amber-700">・目安を超えました。オーナーに渡す時期です</p>}
             <div className="mt-2 flex items-center gap-1 text-[11px] text-gray-500">
               目安 {yen(threshold)}
               <input value={thresholdDraft} onChange={(event) => setThresholdDraft(event.target.value)} placeholder="変更" inputMode="numeric"
