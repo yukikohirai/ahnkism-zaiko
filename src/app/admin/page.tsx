@@ -794,6 +794,17 @@ export default function AdminPage() {
   const [closeDone, setCloseDone] = useState(false)
   const [editCell, setEditCell] = useState<string | null>(null)
   const [editVal, setEditVal] = useState('')
+  // 先行予約の受付期間中（お試し企画は除く）は、先行予約ボタンを目立つ位置に出す
+  const [presaleOpen, setPresaleOpen] = useState(false)
+  useEffect(() => {
+    if (!authorized) return
+    void supabase.from('presale_campaigns').select('reception_start, reception_end, is_test').eq('is_active', true).then(({ data }) => {
+      const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Tokyo' })
+      setPresaleOpen((data ?? []).some((campaign) => !campaign.is_test
+        && (!campaign.reception_start || campaign.reception_start <= today)
+        && (!campaign.reception_end || campaign.reception_end >= today)))
+    })
+  }, [authorized])
 
   useEffect(() => {
     void authorize()
@@ -929,19 +940,31 @@ export default function AdminPage() {
 
   return (
     <div className="min-h-[100dvh] bg-gray-50">
-      {/* ヘッダー */}
+      {/* ヘッダー：よく使うものほど左に大きく、たまに使うものは右に小さく */}
       <div className="bg-white border-b sticky top-0 z-20 shadow-sm">
-        <div className="px-3 py-2 flex items-center gap-2 flex-wrap">
-          <h1 className="text-base font-bold text-gray-800 shrink-0">管理</h1>
-          <Link href="/" className="text-xs text-blue-500 shrink-0">← 入力</Link>
-          <Link href="/admin/operations" className="rounded bg-blue-50 px-2 py-1 text-xs font-medium text-blue-700 shrink-0">入出庫</Link>
-          <Link href="/admin/products" className="rounded bg-purple-50 px-2 py-1 text-xs font-medium text-purple-700 shrink-0">商品管理</Link>
-          <Link href="/admin/orders" className="rounded bg-orange-50 px-2 py-1 text-xs font-medium text-orange-700 shrink-0">発注リスト</Link>
-          <Link href="/admin/presale" className="rounded bg-pink-50 px-2 py-1 text-xs font-medium text-pink-700 shrink-0">先行予約</Link>
-          <Link href="/admin/staff-purchases" className="rounded bg-teal-50 px-2 py-1 text-xs font-medium text-teal-700 shrink-0">スタッフ購入</Link>
-          <Link href="/admin/monthly" className="rounded bg-yellow-50 px-2 py-1 text-xs font-medium text-yellow-700 shrink-0">月別まとめ</Link>
-          <Link href="/admin/report" className="rounded bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 shrink-0">月次レポート</Link>
-          <Link href="/admin/closing" className="rounded bg-gray-800 px-2 py-1 text-xs font-medium text-white shrink-0">月締め</Link>
+        <div className="px-4 py-2.5 flex items-center gap-4 flex-wrap">
+          <div className="flex items-baseline gap-2 shrink-0">
+            <h1 className="text-base font-bold text-gray-800">管理</h1>
+            <Link href="/" className="text-xs text-blue-500">← 入力</Link>
+          </div>
+          <div className="flex items-center gap-2 shrink-0">
+            <div className="flex overflow-hidden rounded-lg border border-blue-200">
+              <Link href="/admin/operations" className="bg-blue-50 px-4 py-2 text-sm font-bold text-blue-700 hover:bg-blue-100">入出庫</Link>
+              <Link href="/admin/orders" className="border-l border-blue-200 bg-blue-50 px-4 py-2 text-sm font-bold text-blue-700 hover:bg-blue-100">発注リスト</Link>
+            </div>
+            <Link href="/admin/products" className="rounded-lg border border-gray-300 px-4 py-2 text-sm font-bold text-gray-700 hover:bg-gray-50">商品管理</Link>
+            <Link href="/admin/staff-purchases" className="rounded-lg border border-gray-200 px-3 py-1.5 text-xs font-medium text-gray-600 hover:bg-gray-50">スタッフ購入</Link>
+            {presaleOpen && (
+              <Link href="/admin/presale" className="rounded-lg border border-pink-200 bg-pink-50 px-3 py-1.5 text-xs font-medium text-pink-700 hover:bg-pink-100">先行予約（受付中）</Link>
+            )}
+          </div>
+          <div className="ml-auto flex items-center gap-3 text-xs text-gray-500 shrink-0">
+            <Link href="/admin/monthly" className="hover:text-gray-800 hover:underline">月別まとめ</Link>
+            <Link href="/admin/report" className="hover:text-gray-800 hover:underline">月次レポート</Link>
+            {!presaleOpen && <Link href="/admin/presale" className="hover:text-gray-800 hover:underline">先行予約</Link>}
+            <span className="h-4 w-px bg-gray-300" aria-hidden="true" />
+            <Link href="/admin/closing" className="rounded border border-gray-300 px-2.5 py-1 font-medium text-gray-700 hover:bg-gray-50">🔒 月締め</Link>
+          </div>
         </div>
       </div>
 
