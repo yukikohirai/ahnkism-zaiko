@@ -86,7 +86,10 @@ export default function OperationsPage() {
   const [fromStoreId, setFromStoreId] = useState<number | null>(null)
   const [toStoreId, setToStoreId] = useState<number | null>(null)
   const [productId, setProductId] = useState<number | null>(null)
-  const [quantity, setQuantity] = useState(1)
+  // 数量は空欄から入力する（最初から「1」を入れない）。スマホでも押しやすいよう −／＋ ボタンも付ける
+  const [quantityText, setQuantityText] = useState('')
+  const quantity = Number.parseInt(quantityText.normalize('NFKC'), 10) || 0
+  const stepQuantity = (delta: number) => setQuantityText(String(Math.max(1, quantity + delta)))
   const [actualStock, setActualStock] = useState('')
   const [reason, setReason] = useState<'usage' | 'retail_sale' | 'personal_sale'>('retail_sale')
   const [search, setSearch] = useState('')
@@ -312,7 +315,7 @@ export default function OperationsPage() {
         return
       }
     } else if (quantity < 1) {
-      setError('数量を確認してください。')
+      setError('数量を入力してください（1以上）。')
       return
     }
     setSaving(true)
@@ -356,7 +359,7 @@ export default function OperationsPage() {
     setSaving(false)
     // 同じ検索語で続けて登録することが多いので、検索はそのまま残す
     setProductId(null)
-    setQuantity(1)
+    setQuantityText('')
     setActualStock('')
     await Promise.all([loadData(), loadHistory()])
   }
@@ -449,7 +452,13 @@ export default function OperationsPage() {
             </label>
           ) : (
             <label className="mt-3 block text-xs font-medium text-gray-500">数量
-              <input type="number" min="1" step="1" value={quantity} onChange={(event) => setQuantity(Math.max(1, parseInt(event.target.value) || 1))} className="mt-1 block w-full rounded-xl border border-gray-200 px-3 py-3 text-center text-lg font-bold" />
+              <div className="mt-1 flex items-stretch gap-2">
+                <button type="button" onClick={() => stepQuantity(-1)} aria-label="1減らす" className="w-14 shrink-0 rounded-xl border border-gray-300 bg-gray-50 text-2xl font-bold text-gray-700 active:bg-gray-200">−</button>
+                <input type="text" inputMode="numeric" value={quantityText} placeholder="数を入力"
+                  onChange={(event) => setQuantityText(event.target.value.normalize('NFKC').replace(/[^0-9]/g, ''))}
+                  className="block w-full rounded-xl border border-gray-200 px-3 py-3 text-center text-lg font-bold" />
+                <button type="button" onClick={() => stepQuantity(1)} aria-label="1増やす" className="w-14 shrink-0 rounded-xl border border-gray-300 bg-gray-50 text-2xl font-bold text-gray-700 active:bg-gray-200">＋</button>
+              </div>
             </label>
           )}
           {message && <p className="mt-3 rounded-xl bg-green-50 px-3 py-2 text-sm text-green-700">{message}</p>}
