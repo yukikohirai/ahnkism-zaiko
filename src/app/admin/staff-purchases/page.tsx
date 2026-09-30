@@ -18,7 +18,8 @@ type Purchase = {
   purchased_on: string
   staff_id: number
   store_id: number
-  product_id: number
+  product_id: number | null
+  item_name: string | null
   quantity: number
   unit_price: number
   kind: Kind
@@ -82,6 +83,9 @@ export default function StaffPurchasesPage() {
   const [kind, setKind] = useState<Kind>('store_stock')
   const [search, setSearch] = useState('')
   const [productId, setProductId] = useState<number | null>(null)
+  // 個人発注で商品一覧にない商品は、商品名を手で書く
+  const [freeItem, setFreeItem] = useState(false)
+  const [itemName, setItemName] = useState('')
   const [quantity, setQuantity] = useState('1')
   const [unitPrice, setUnitPrice] = useState('')
   const [collected, setCollected] = useState(false)
@@ -129,7 +133,7 @@ export default function StaffPurchasesPage() {
       fetchAll((from, to) => supabase.from('products').select('id, brand, name, cost_price').eq('is_active', true).order('id').range(from, to)),
       fetchAll((from, to) => supabase.from('store_products').select('store_id, product_id').order('store_id').order('product_id').range(from, to)),
       fetchAll((from, to) => supabase.from('staff_purchases')
-        .select('id, purchased_on, staff_id, store_id, product_id, quantity, unit_price, kind, collected_on, note')
+        .select('id, purchased_on, staff_id, store_id, product_id, item_name, quantity, unit_price, kind, collected_on, note')
         .order('purchased_on', { ascending: false }).order('created_at', { ascending: false }).order('id').range(from, to)),
       supabase.from('cash_payouts').select('id, box, paid_at, amount, note').order('paid_at', { ascending: false }),
       supabase.from('app_settings').select('value').eq('key', 'safe_threshold').maybeSingle(),
@@ -165,6 +169,9 @@ export default function StaffPurchasesPage() {
     const product = productMap.get(id)
     return product ? `${product.brand ? `${product.brand} ` : ''}${product.name}` : `商品#${id}`
   }
+  const rowLabel = (row: { product_id: number | null; item_name: string | null }) => (
+    row.product_id !== null ? productLabel(row.product_id) : `${row.item_name ?? ''}（一覧外）`
+  )
   const staffName = (id: number) => staffMap.get(id)?.name ?? `（名簿にいない #${id}）`
 
   // 預かり金の残高：集金済みの合計 − 渡した合計
@@ -201,19 +208,23 @@ export default function StaffPurchasesPage() {
     setMessage('')
     const qty = Number(quantity)
     const price = parseYen(unitPrice)
-    if (!storeId || !staffId || !productId) { setError('店舗・スタッフ・商品を選んでください。'); return }
+    const useFreeItem = kind === 'personal_order' && freeItem
+    if (!storeId || !staffId) { setError('店舗とスタッフを選んでください。'); return }
+    if (useFreeItem ? !itemName.trim() : !productId) { setError(useFreeItem ? '商品名を入力してください。' : '商品を選んでください。'); return }
     if (!Number.isInteger(qty) || qty <= 0) { setError('数は1以上の整数で入力してください。'); return }
     if (price === null) { setError('単価（税込）を入力してください。'); return }
     if (date < minDate) { setError(`${minDate.replaceAll('-', '/')} より前の日付では登録できません。`); return }
     setSaving(true)
     const { error: saveError } = await supabase.rpc('add_staff_purchase', {
-      p_purchased_on: date, p_staff_id: staffId, p_store_id: storeId, p_product_id: productId,
+      p_purchased_on: date, p_staff_id: staffId, p_store_id: storeId, p_product_id: useFreeItem ? null : productId,
       p_quantity: qty, p_unit_price: price, p_kind: kind, p_collected: collected, p_note: note || null,
+      p_item_name: useFreeItem ? itemName.trim() : null,
     })
     setSaving(false)
     if (saveError) { setError(`登録できませんでした：${saveError.message}`); return }
-    setMessage(`${staffName(staffId)}：${productLabel(productId)} ×${qty}（${yen(qty * price)}）を登録しました。`)
+    setMessage(`${staffName(staffId)}：${useFreeItem ? itemName.trim() : productLabel(productId!)} ×${qty}（${yen(qty * price)}）を登録しました。`)
     setProductId(null)
+    setItemName('')
     setQuantity('1')
     setUnitPrice('')
     setNote('')
@@ -248,7 +259,7 @@ export default function StaffPurchasesPage() {
 
   async function cancelPurchase(row: Purchase) {
     const stockNote = row.kind === 'store_stock' ? '\n店舗の在庫も元に戻ります。' : ''
-    if (!confirm(`この記録を取り消します。\n${row.purchased_on} ${staffName(row.staff_id)}：${productLabel(row.product_id)} ×${row.quantity}${stockNote}\nよろしいですか？`)) return
+    if (!confirm(`この記録を取り消します。\n${row.purchased_on} ${staffName(row.staff_id)}：${rowLabel(row)} ×${row.quantity}${stockNote}\nよろしいですか？`)) return
     const { error: cancelError } = await supabase.rpc('cancel_staff_purchase', { p_id: row.id })
     if (cancelError) { setError(`取り消せませんでした：${cancelError.message}`); return }
     setEditingId(null)
@@ -300,10 +311,10 @@ export default function StaffPurchasesPage() {
   const summary = useMemo(() => {
     if (sumStaff === null) return null
     const rows = purchases.filter((row) => row.staff_id === sumStaff && row.purchased_on >= sumFrom && row.purchased_on <= sumTo)
-    const grouped = new Map<string, { product_id: number; kind: Kind; unit_price: number; quantity: number; amount: number; unpaid: number }>()
+    const grouped = new Map<string, { product_id: number | null; item_name: string | null; kind: Kind; unit_price: number; quantity: number; amount: number; unpaid: number }>()
     rows.forEach((row) => {
-      const key = `${row.product_id}_${row.kind}_${row.unit_price}`
-      const item = grouped.get(key) ?? { product_id: row.product_id, kind: row.kind, unit_price: row.unit_price, quantity: 0, amount: 0, unpaid: 0 }
+      const key = `${row.product_id ?? `name:${row.item_name}`}_${row.kind}_${row.unit_price}`
+      const item = grouped.get(key) ?? { product_id: row.product_id, item_name: row.item_name, kind: row.kind, unit_price: row.unit_price, quantity: 0, amount: 0, unpaid: 0 }
       item.quantity += row.quantity
       item.amount += row.quantity * row.unit_price
       if (!row.collected_on) item.unpaid += row.quantity * row.unit_price
@@ -384,7 +395,7 @@ export default function StaffPurchasesPage() {
               <h2 className="font-bold text-gray-800">購入を登録</h2>
               <div className="mt-3 flex rounded-lg bg-gray-100 p-0.5 text-sm font-medium">
                 {(['store_stock', 'personal_order'] as Kind[]).map((value) => (
-                  <button key={value} onClick={() => { setKind(value); setProductId(null) }}
+                  <button key={value} onClick={() => { setKind(value); setProductId(null); setFreeItem(false) }}
                     className={`flex-1 rounded-md px-3 py-2 ${kind === value ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500'}`}>
                     {KIND_LABEL[value]}
                     <span className="block text-[10px] font-normal text-gray-400">{value === 'store_stock' ? '店舗の在庫が減る・集金は金庫へ' : '在庫は動かない・集金はディーラー支払い用へ'}</span>
@@ -410,7 +421,13 @@ export default function StaffPurchasesPage() {
 
               <div className="mt-3">
                 <p className="text-xs text-gray-500">商品{kind === 'store_stock' && '（この店舗の取扱商品から）'}</p>
-                {selectedProduct ? (
+                {kind === 'personal_order' && freeItem ? (
+                  <div className="mt-1">
+                    <input value={itemName} onChange={(event) => setItemName(event.target.value)} placeholder="商品名（ブランドも一緒に）"
+                      className="block w-full rounded-lg border border-purple-300 bg-purple-50/40 px-3 py-2 text-base outline-none focus:border-purple-500" />
+                    <button onClick={() => { setFreeItem(false); setItemName('') }} className="mt-1 text-xs text-blue-600 underline">一覧から選ぶ</button>
+                  </div>
+                ) : selectedProduct ? (
                   <div className="mt-1 flex items-center justify-between rounded-lg bg-blue-50 px-3 py-2 text-sm">
                     <span className="font-medium text-blue-800">{productLabel(selectedProduct.id)}</span>
                     <button onClick={() => setProductId(null)} className="text-xs text-blue-600 underline">選び直す</button>
@@ -432,6 +449,11 @@ export default function StaffPurchasesPage() {
                       </ul>
                     )}
                     {normalize(search) && candidates.length === 0 && <p className="mt-1 text-xs text-gray-400">見つかりません</p>}
+                    {kind === 'personal_order' && (
+                      <button onClick={() => { setFreeItem(true); setItemName(search); setSearch(''); setUnitPrice('') }} className="mt-1 text-xs text-purple-700 underline">
+                        一覧にない商品を入力する
+                      </button>
+                    )}
                   </>
                 )}
               </div>
@@ -512,7 +534,7 @@ export default function StaffPurchasesPage() {
                             <span className={`rounded px-1.5 py-0.5 ${row.kind === 'store_stock' ? 'bg-green-50 text-green-700' : 'bg-purple-50 text-purple-700'}`}>{KIND_LABEL[row.kind]}</span>
                           </td>
                           <td className="border border-gray-200 px-2 py-1.5">
-                            {productLabel(row.product_id)}
+                            {rowLabel(row)}
                             {editing
                               ? <input value={editNote} onChange={(event) => setEditNote(event.target.value)} placeholder="メモ" className="mt-1 block w-full rounded border border-gray-200 px-1 py-0.5 text-base" />
                               : row.note && <span className="block text-[11px] text-gray-400">{row.note}</span>}
@@ -586,8 +608,8 @@ export default function StaffPurchasesPage() {
                   </thead>
                   <tbody>
                     {summary.items.map((item) => (
-                      <tr key={`${item.product_id}_${item.kind}_${item.unit_price}`}>
-                        <td className="border border-gray-200 px-2 py-1.5">{productLabel(item.product_id)}</td>
+                      <tr key={`${item.product_id ?? `name:${item.item_name}`}_${item.kind}_${item.unit_price}`}>
+                        <td className="border border-gray-200 px-2 py-1.5">{rowLabel(item)}</td>
                         <td className="border border-gray-200 px-2 py-1.5 text-xs">{KIND_LABEL[item.kind]}</td>
                         <td className="border border-gray-200 px-2 py-1.5 text-right">{yen(item.unit_price)}</td>
                         <td className="border border-gray-200 px-2 py-1.5 text-right">{item.quantity}</td>
