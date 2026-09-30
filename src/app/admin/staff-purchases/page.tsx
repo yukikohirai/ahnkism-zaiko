@@ -163,7 +163,7 @@ export default function StaffPurchasesPage() {
         .order('purchased_on', { ascending: false }).order('created_at', { ascending: false }).order('id').range(from, to)),
       supabase.from('cash_payouts').select('id, box, dealer, paid_at, amount, note').order('paid_at', { ascending: false }),
       supabase.from('app_settings').select('value').eq('key', 'safe_threshold').maybeSingle(),
-      supabase.rpc('closed_through'),
+      supabase.rpc('open_from'),
       supabase.from('cash_openings').select('id, box, dealer, amount, as_of, note').order('as_of', { ascending: false }),
     ])
     if (storeResult.error || staffResult.error || productResult.error || assignmentResult.error || purchaseResult.error || payoutResult.error || openingResult.error) {
@@ -180,9 +180,7 @@ export default function StaffPurchasesPage() {
     setOpenings((openingResult.data ?? []) as Opening[])
     if (settingResult.data?.value != null) setThreshold(Number(settingResult.data.value))
     if (closedResult.data) {
-      const next = new Date(`${closedResult.data}T00:00:00Z`)
-      next.setUTCDate(next.getUTCDate() + 1)
-      const nextDate = next.toISOString().slice(0, 10)
+      const nextDate = closedResult.data as string
       setMinDate(nextDate > START_DATE ? nextDate : START_DATE)
     }
     setLoading(false)

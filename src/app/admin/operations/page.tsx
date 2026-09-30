@@ -77,11 +77,9 @@ export default function OperationsPage() {
   // 締めた月の翌日より前の日付は入力・修正できない
   const [minDate, setMinDate] = useState<string | undefined>(undefined)
   useEffect(() => {
-    void supabase.rpc('closed_through').then(({ data }) => {
-      if (!data) return
-      const next = new Date(`${data}T00:00:00Z`)
-      next.setUTCDate(next.getUTCDate() + 1)
-      setMinDate(next.toISOString().slice(0, 10))
+    // 最後に締めた日の翌日から入力できる（締め日の翌日〜月末の分は、自動で翌月1日の記録になる）
+    void supabase.rpc('open_from').then(({ data }) => {
+      if (data) setMinDate(data as string)
     })
   }, [])
   const [storeId, setStoreId] = useState<number | null>(null)
