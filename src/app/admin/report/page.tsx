@@ -7,6 +7,7 @@ import { getCurrentProfile } from '@/lib/auth'
 import { supabase } from '@/lib/supabase'
 import { fetchAll } from '@/lib/fetchAll'
 import { withTax, withoutTax, yen } from '@/lib/tax'
+import BrandCostSearch from '@/components/report/BrandCostSearch'
 
 type Store = { id: number; name: string }
 type ReportProduct = {
@@ -391,6 +392,10 @@ export default function ReportPage() {
             )
           })()}
         </section>
+
+        {!loading && (
+          <BrandCostSearch stores={stores} products={products} taxIncluded={taxIncluded} defaultFrom={from} defaultTo={to} />
+        )}
       </div>
     </main>
   )
