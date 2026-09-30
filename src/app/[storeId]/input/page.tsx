@@ -36,6 +36,16 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
   const [completed, setCompleted] = useState(false)
   const [saveError, setSaveError] = useState('')
   const [showConfirm, setShowConfirm] = useState(false)
+  // 締めた月の翌日より前の日付は選べない
+  const [minDate, setMinDate] = useState<string | undefined>(undefined)
+  useEffect(() => {
+    void supabase.rpc('closed_through').then(({ data }) => {
+      if (!data) return
+      const next = new Date(`${data}T00:00:00Z`)
+      next.setUTCDate(next.getUTCDate() + 1)
+      setMinDate(next.toISOString().slice(0, 10))
+    })
+  }, [])
 
   useEffect(() => {
     void authorize()
@@ -231,6 +241,10 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
   }
 
   async function handleDateChange(nextDate: string) {
+    if (minDate && nextDate < minDate) {
+      setSaveError('締めた月の日付では入力できません。')
+      return
+    }
     setDate(nextDate)
     if (!session || completed) return
     const { error } = await supabase.from('inventory_sessions')
@@ -321,6 +335,7 @@ export default function InputPage({ params }: { params: Promise<{ storeId: strin
             <input
               type="date"
               value={date}
+              min={minDate}
               onChange={(e) => void handleDateChange(e.target.value)}
               disabled={completed}
               className="text-base text-blue-600 text-center border-none outline-none bg-transparent"

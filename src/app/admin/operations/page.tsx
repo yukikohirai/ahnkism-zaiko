@@ -74,6 +74,16 @@ export default function OperationsPage() {
   const [historyError, setHistoryError] = useState('')
   const [mode, setMode] = useState<Mode>('receipt')
   const [date, setDate] = useState(today())
+  // 締めた月の翌日より前の日付は入力・修正できない
+  const [minDate, setMinDate] = useState<string | undefined>(undefined)
+  useEffect(() => {
+    void supabase.rpc('closed_through').then(({ data }) => {
+      if (!data) return
+      const next = new Date(`${data}T00:00:00Z`)
+      next.setUTCDate(next.getUTCDate() + 1)
+      setMinDate(next.toISOString().slice(0, 10))
+    })
+  }, [])
   const [storeId, setStoreId] = useState<number | null>(null)
   const [fromStoreId, setFromStoreId] = useState<number | null>(null)
   const [toStoreId, setToStoreId] = useState<number | null>(null)
@@ -378,7 +388,7 @@ export default function OperationsPage() {
 
         <section className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
           <label className="block text-xs font-medium text-gray-500">日付
-            <input type="date" value={date} onChange={(event) => setDate(event.target.value)} className="mt-1 block w-full rounded-xl border border-gray-200 px-3 py-2 text-base" />
+            <input type="date" value={date} min={minDate} onChange={(event) => setDate(event.target.value)} className="mt-1 block w-full rounded-xl border border-gray-200 px-3 py-2 text-base" />
           </label>
 
           {mode === 'transfer' ? (
@@ -494,7 +504,10 @@ export default function OperationsPage() {
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
                     <div className={`font-bold ${item.quantity > 0 ? 'text-green-600' : 'text-red-600'}`}>{item.quantity > 0 ? '+' : ''}{item.quantity}</div>
-                    {editMode && editingId !== item.id && (
+                    {editMode && editingId !== item.id && minDate && item.occurred_on < minDate && (
+                      <span className="text-[10px] text-gray-400">締め済み</span>
+                    )}
+                    {editMode && editingId !== item.id && !(minDate && item.occurred_on < minDate) && (
                       <button onClick={() => void startEdit(item)} className="rounded-lg bg-blue-50 px-2.5 py-1.5 text-xs font-medium text-blue-700">修正</button>
                     )}
                   </div>
@@ -502,7 +515,7 @@ export default function OperationsPage() {
                 {editMode && editingId === item.id && (
                   <div className="mt-2 space-y-2 rounded-xl border border-amber-200 bg-amber-50/50 p-3">
                     <label className="block text-xs text-gray-500">日付
-                      <input type="date" value={editDate} onChange={(event) => setEditDate(event.target.value)} className="mt-1 block w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-base" />
+                      <input type="date" value={editDate} min={minDate} onChange={(event) => setEditDate(event.target.value)} className="mt-1 block w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-base" />
                     </label>
                     {isTransfer(item.movement_type) ? (
                       <div className="grid grid-cols-2 gap-2">

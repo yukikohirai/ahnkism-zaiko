@@ -19,7 +19,7 @@ type StoreProductSummary = {
   product: { id: number; category_id: number; brand: string | null; name: string; dealer: string | null; manufacturer: string | null; usage_only: boolean }
 }
 type MovementSummary = { store_id: number; product_id: number; quantity: number; occurred_on: string; movement_type: string }
-type StoreAssignment = { store_id: number; product_id: number; sort_order: number }
+type StoreAssignment = { store_id: number; product_id: number; sort_order: number; opening_stock: number }
 type InventoryMovement = {
   id: string
   store_id: number
@@ -139,6 +139,7 @@ function InventoryHistoryTable({ stores, products, year, month, categories, sele
 }) {
   const [movements, setMovements] = useState<InventoryMovement[]>([])
   const [assignments, setAssignments] = useState<StoreAssignment[]>([])
+  const [priorNet, setPriorNet] = useState<Map<string, number>>(new Map())
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const [selectedStoreId, setSelectedStoreId] = useState<number | 'all'>('all')
@@ -154,7 +155,7 @@ function InventoryHistoryTable({ stores, products, year, month, categories, sele
     const productIds = products.map((product) => product.id)
     const from = toDate(year, month, 1)
     const to = toDate(year, month, getDays(year, month).length)
-    const [movementResult, assignmentResult] = await Promise.all([
+    const [movementResult, assignmentResult, priorResult] = await Promise.all([
       fetchAll((start, end) => supabase.from('inventory_movements')
         .select('id, store_id, product_id, occurred_on, quantity, movement_type')
         .in('product_id', productIds)
@@ -164,14 +165,27 @@ function InventoryHistoryTable({ stores, products, year, month, categories, sele
         .order('created_at')
         .order('id')
         .range(start, end)),
-      fetchAll((start, end) => supabase.from('store_products').select('store_id, product_id, sort_order').in('product_id', productIds)
+      fetchAll((start, end) => supabase.from('store_products').select('store_id, product_id, sort_order, opening_stock').in('product_id', productIds)
         .order('store_id').order('product_id').range(start, end)),
+      // 繰越の計算用：この月より前の入出庫
+      fetchAll((start, end) => supabase.from('inventory_movements')
+        .select('id, store_id, product_id, quantity')
+        .in('product_id', productIds)
+        .lt('occurred_on', from)
+        .order('id')
+        .range(start, end)),
     ])
-    if (movementResult.error || assignmentResult.error) {
+    if (movementResult.error || assignmentResult.error || priorResult.error) {
       setError('月別履歴を読み込めませんでした。')
     }
     setMovements((movementResult.data ?? []) as InventoryMovement[])
     setAssignments((assignmentResult.data ?? []) as StoreAssignment[])
+    const prior = new Map<string, number>()
+    ;((priorResult.data ?? []) as { store_id: number; product_id: number; quantity: number }[]).forEach((row) => {
+      const key = `${row.store_id}_${row.product_id}`
+      prior.set(key, (prior.get(key) ?? 0) + row.quantity)
+    })
+    setPriorNet(prior)
     setLoading(false)
   }, [month, products, year])
 
@@ -188,7 +202,7 @@ function InventoryHistoryTable({ stores, products, year, month, categories, sele
     })
     return map
   }, [movements])
-  // 「増減」列は非表示中（分かりにくいと店舗から要望）。戻すときにこの集計を使う
+  // 月末在庫 ＝ 繰越 ＋ この月の入出庫すべて
   const monthlyNetMap = useMemo(() => {
     const map = new Map<string, number>()
     movements.forEach((movement) => {
@@ -222,6 +236,13 @@ function InventoryHistoryTable({ stores, products, year, month, categories, sele
   const visibleStores = selectedStoreId === 'all'
     ? stores
     : stores.filter((store) => store.id === selectedStoreId)
+  // 繰越 ＝ 8月末の在庫（opening_stock）＋ この月より前の入出庫
+  const carryMap = useMemo(() => new Map(
+    assignments.map((assignment) => {
+      const key = `${assignment.store_id}_${assignment.product_id}`
+      return [key, (assignment.opening_stock ?? 0) + (priorNet.get(key) ?? 0)]
+    })
+  ), [assignments, priorNet])
   const assignmentOrderMap = useMemo(() => new Map(
     assignments.map((assignment) => [`${assignment.store_id}_${assignment.product_id}`, assignment.sort_order])
   ), [assignments])
@@ -283,11 +304,13 @@ function InventoryHistoryTable({ stores, products, year, month, categories, sele
                 <th className="sticky left-0 z-30 w-14 min-w-14 border border-gray-200 bg-gray-100 px-1 py-1.5 text-left text-[10px]">ブランド</th>
                 <th className="sticky left-[56px] z-30 w-48 min-w-48 border border-gray-200 bg-gray-100 px-1 py-1.5 text-left">商品名</th>
                 <th className="sticky left-[248px] z-30 w-10 min-w-10 border border-gray-200 bg-gray-100 px-1 py-1.5 text-center text-[10px] text-gray-500">店舗</th>
-                <th className="sticky left-[288px] z-30 w-9 min-w-9 border border-gray-200 bg-emerald-50 px-0.5 py-1.5 text-center text-[10px] font-bold text-emerald-700">入荷</th>
-                <th className="sticky left-[324px] z-30 w-9 min-w-9 border border-gray-200 bg-blue-50 px-0.5 py-1.5 text-center text-[10px] font-bold text-blue-700">業務</th>
-                <th className="sticky left-[360px] z-30 w-9 min-w-9 border border-gray-200 bg-green-50 px-0.5 py-1.5 text-center text-[10px] font-bold text-green-700">店販</th>
-                <th className="sticky left-[396px] z-30 w-9 min-w-9 border border-gray-200 bg-amber-50 px-0.5 py-1.5 text-center text-[10px] font-bold text-amber-700">個人</th>
-                <th className="sticky left-[432px] z-30 w-9 min-w-9 border border-gray-200 bg-gray-200 px-0.5 py-1.5 text-center text-[10px] font-bold text-gray-700">誤差</th>
+                <th className="sticky left-[288px] z-30 w-9 min-w-9 border border-gray-200 bg-white px-0.5 py-1.5 text-center text-[10px] font-bold text-gray-700">繰越</th>
+                <th className="sticky left-[324px] z-30 w-9 min-w-9 border border-gray-200 bg-emerald-50 px-0.5 py-1.5 text-center text-[10px] font-bold text-emerald-700">入荷</th>
+                <th className="sticky left-[360px] z-30 w-9 min-w-9 border border-gray-200 bg-blue-50 px-0.5 py-1.5 text-center text-[10px] font-bold text-blue-700">業務</th>
+                <th className="sticky left-[396px] z-30 w-9 min-w-9 border border-gray-200 bg-green-50 px-0.5 py-1.5 text-center text-[10px] font-bold text-green-700">店販</th>
+                <th className="sticky left-[432px] z-30 w-9 min-w-9 border border-gray-200 bg-amber-50 px-0.5 py-1.5 text-center text-[10px] font-bold text-amber-700">個人</th>
+                <th className="sticky left-[468px] z-30 w-9 min-w-9 border border-gray-200 bg-gray-200 px-0.5 py-1.5 text-center text-[10px] font-bold text-gray-700">誤差</th>
+                <th className="sticky left-[504px] z-30 w-11 min-w-11 border border-gray-200 bg-indigo-50 px-0.5 py-1.5 text-center text-[10px] font-bold leading-tight text-indigo-700">月末<br />在庫</th>
                 {days.map((day) => {
                   const dayOfWeek = dow(year, month, day)
                   return (
@@ -310,6 +333,8 @@ function InventoryHistoryTable({ stores, products, year, month, categories, sele
                   const retailTotal = -(monthlyTypeMap.get(`${store.id}_${product.id}_retail_sale`) ?? 0)
                   const personalTotal = -(monthlyTypeMap.get(`${store.id}_${product.id}_personal_sale`) ?? 0)
                   const adjustmentTotal = monthlyTypeMap.get(`${store.id}_${product.id}_adjustment`) ?? 0
+                  const carryOver = carryMap.get(`${store.id}_${product.id}`) ?? 0
+                  const monthEnd = carryOver + (monthlyNetMap.get(`${store.id}_${product.id}`) ?? 0)
                   return (
                     <tr key={`${product.id}_${store.id}`} className={rowBackground}>
                       <td className={`sticky left-0 z-10 whitespace-normal break-words border border-gray-200 px-1 py-1 text-[9px] leading-snug text-gray-400 ${rowBackground}`}>
@@ -319,11 +344,13 @@ function InventoryHistoryTable({ stores, products, year, month, categories, sele
                         {storeIndex === 0 ? product.name : ''}
                       </td>
                       <td className="sticky left-[248px] z-10 border border-gray-200 bg-gray-50 px-1 py-1 text-center text-[10px] font-medium text-gray-500">{store.name}</td>
-                      <td className={`sticky left-[288px] z-10 border border-gray-200 bg-emerald-50 px-0.5 py-1 text-center font-bold ${incomingTotal === 0 ? 'text-gray-300' : 'text-emerald-700'}`}>{incomingTotal === 0 ? '−' : incomingTotal}</td>
-                      <td className={`sticky left-[324px] z-10 border border-gray-200 bg-blue-50 px-0.5 py-1 text-center font-bold ${usageTotal === 0 ? 'text-gray-300' : 'text-blue-700'}`}>{usageTotal === 0 ? '−' : usageTotal}</td>
-                      <td className={`sticky left-[360px] z-10 border border-gray-200 bg-green-50 px-0.5 py-1 text-center font-bold ${retailTotal === 0 ? 'text-gray-300' : 'text-green-700'}`}>{retailTotal === 0 ? '−' : retailTotal}</td>
-                      <td className={`sticky left-[396px] z-10 border border-gray-200 bg-amber-50 px-0.5 py-1 text-center font-bold ${personalTotal === 0 ? 'text-gray-300' : 'text-amber-700'}`}>{personalTotal === 0 ? '−' : personalTotal}</td>
-                      <td className={`sticky left-[432px] z-10 border border-gray-200 bg-gray-100 px-0.5 py-1 text-center font-bold ${adjustmentTotal === 0 ? 'text-gray-300' : adjustmentTotal > 0 ? 'text-green-700' : 'text-red-600'}`}>{adjustmentTotal === 0 ? '−' : signedQuantity(adjustmentTotal)}</td>
+                      <td className={`sticky left-[288px] z-10 border border-gray-200 bg-white px-0.5 py-1 text-center font-bold ${carryOver < 0 ? 'text-red-600' : 'text-gray-700'}`}>{carryOver}</td>
+                      <td className={`sticky left-[324px] z-10 border border-gray-200 bg-emerald-50 px-0.5 py-1 text-center font-bold ${incomingTotal === 0 ? 'text-gray-300' : 'text-emerald-700'}`}>{incomingTotal === 0 ? '−' : incomingTotal}</td>
+                      <td className={`sticky left-[360px] z-10 border border-gray-200 bg-blue-50 px-0.5 py-1 text-center font-bold ${usageTotal === 0 ? 'text-gray-300' : 'text-blue-700'}`}>{usageTotal === 0 ? '−' : usageTotal}</td>
+                      <td className={`sticky left-[396px] z-10 border border-gray-200 bg-green-50 px-0.5 py-1 text-center font-bold ${retailTotal === 0 ? 'text-gray-300' : 'text-green-700'}`}>{retailTotal === 0 ? '−' : retailTotal}</td>
+                      <td className={`sticky left-[432px] z-10 border border-gray-200 bg-amber-50 px-0.5 py-1 text-center font-bold ${personalTotal === 0 ? 'text-gray-300' : 'text-amber-700'}`}>{personalTotal === 0 ? '−' : personalTotal}</td>
+                      <td className={`sticky left-[468px] z-10 border border-gray-200 bg-gray-100 px-0.5 py-1 text-center font-bold ${adjustmentTotal === 0 ? 'text-gray-300' : adjustmentTotal > 0 ? 'text-green-700' : 'text-red-600'}`}>{adjustmentTotal === 0 ? '−' : signedQuantity(adjustmentTotal)}</td>
+                      <td className={`sticky left-[504px] z-10 border border-gray-200 bg-indigo-50 px-0.5 py-1 text-center font-bold ${monthEnd < 0 ? 'text-red-600' : 'text-indigo-700'}`}>{monthEnd}</td>
                       {days.map((day) => {
                         const date = toDate(year, month, day)
                         const cellMovements = movementCellMap.get(`${store.id}_${product.id}_${date}`) ?? []
@@ -913,13 +940,7 @@ export default function AdminPage() {
           <Link href="/admin/presale" className="rounded bg-pink-50 px-2 py-1 text-xs font-medium text-pink-700 shrink-0">先行予約</Link>
           <Link href="/admin/monthly" className="rounded bg-yellow-50 px-2 py-1 text-xs font-medium text-yellow-700 shrink-0">月別まとめ</Link>
           <Link href="/admin/report" className="rounded bg-emerald-50 px-2 py-1 text-xs font-medium text-emerald-700 shrink-0">月次レポート</Link>
-          <button
-            disabled
-            title="9月の運用開始までに月締め機能を反映します"
-            className="px-2 py-1 bg-gray-200 text-gray-500 rounded text-xs font-medium"
-          >
-            月締め（9月開始）
-          </button>
+          <Link href="/admin/closing" className="rounded bg-gray-800 px-2 py-1 text-xs font-medium text-white shrink-0">月締め</Link>
         </div>
       </div>
 
