@@ -202,7 +202,7 @@ function InventoryHistoryTable({ stores, products, year, month, categories, sele
     })
     return map
   }, [movements])
-  // 月末在庫 ＝ 繰越 ＋ この月の入出庫すべて
+  // 「増減」「月末在庫」列は非表示中（本部の希望）。戻すときにこの集計を使う（月末在庫 ＝ 繰越 ＋ これ）
   const monthlyNetMap = useMemo(() => {
     const map = new Map<string, number>()
     movements.forEach((movement) => {
@@ -310,7 +310,6 @@ function InventoryHistoryTable({ stores, products, year, month, categories, sele
                 <th className="sticky left-[396px] z-30 w-9 min-w-9 border border-gray-200 bg-green-50 px-0.5 py-1.5 text-center text-[10px] font-bold text-green-700">店販</th>
                 <th className="sticky left-[432px] z-30 w-9 min-w-9 border border-gray-200 bg-amber-50 px-0.5 py-1.5 text-center text-[10px] font-bold text-amber-700">個人</th>
                 <th className="sticky left-[468px] z-30 w-9 min-w-9 border border-gray-200 bg-gray-200 px-0.5 py-1.5 text-center text-[10px] font-bold text-gray-700">誤差</th>
-                <th className="sticky left-[504px] z-30 w-11 min-w-11 border border-gray-200 bg-indigo-50 px-0.5 py-1.5 text-center text-[10px] font-bold leading-tight text-indigo-700">月末<br />在庫</th>
                 {days.map((day) => {
                   const dayOfWeek = dow(year, month, day)
                   return (
@@ -334,7 +333,6 @@ function InventoryHistoryTable({ stores, products, year, month, categories, sele
                   const personalTotal = -(monthlyTypeMap.get(`${store.id}_${product.id}_personal_sale`) ?? 0)
                   const adjustmentTotal = monthlyTypeMap.get(`${store.id}_${product.id}_adjustment`) ?? 0
                   const carryOver = carryMap.get(`${store.id}_${product.id}`) ?? 0
-                  const monthEnd = carryOver + (monthlyNetMap.get(`${store.id}_${product.id}`) ?? 0)
                   return (
                     <tr key={`${product.id}_${store.id}`} className={rowBackground}>
                       <td className={`sticky left-0 z-10 whitespace-normal break-words border border-gray-200 px-1 py-1 text-[9px] leading-snug text-gray-400 ${rowBackground}`}>
@@ -350,7 +348,6 @@ function InventoryHistoryTable({ stores, products, year, month, categories, sele
                       <td className={`sticky left-[396px] z-10 border border-gray-200 bg-green-50 px-0.5 py-1 text-center font-bold ${retailTotal === 0 ? 'text-gray-300' : 'text-green-700'}`}>{retailTotal === 0 ? '−' : retailTotal}</td>
                       <td className={`sticky left-[432px] z-10 border border-gray-200 bg-amber-50 px-0.5 py-1 text-center font-bold ${personalTotal === 0 ? 'text-gray-300' : 'text-amber-700'}`}>{personalTotal === 0 ? '−' : personalTotal}</td>
                       <td className={`sticky left-[468px] z-10 border border-gray-200 bg-gray-100 px-0.5 py-1 text-center font-bold ${adjustmentTotal === 0 ? 'text-gray-300' : adjustmentTotal > 0 ? 'text-green-700' : 'text-red-600'}`}>{adjustmentTotal === 0 ? '−' : signedQuantity(adjustmentTotal)}</td>
-                      <td className={`sticky left-[504px] z-10 border border-gray-200 bg-indigo-50 px-0.5 py-1 text-center font-bold ${monthEnd < 0 ? 'text-red-600' : 'text-indigo-700'}`}>{monthEnd}</td>
                       {days.map((day) => {
                         const date = toDate(year, month, day)
                         const cellMovements = movementCellMap.get(`${store.id}_${product.id}_${date}`) ?? []
