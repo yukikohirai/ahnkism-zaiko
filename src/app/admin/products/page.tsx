@@ -389,6 +389,26 @@ export default function ProductManagementPage() {
     }
   }
 
+  // 停止中の商品を削除する。在庫が残っていれば店舗ごとの数を出して確認する
+  async function deleteStopped(product: Product) {
+    setError('')
+    setMessage('')
+    const { data: stockRows, error: stockError } = await supabase.from('current_store_stock')
+      .select('store_id, current_stock').eq('product_id', product.id)
+    if (stockError) { setError('在庫を確認できませんでした。もう一度押してください。'); return }
+    const remaining = ((stockRows ?? []) as { store_id: number; current_stock: number }[]).filter((row) => row.current_stock !== 0)
+    const productName = `${product.brand ? `${product.brand} ` : ''}${product.name}`
+    const stockText = remaining.map((row) => `${stores.find((store) => store.id === row.store_id)?.name ?? `店舗${row.store_id}`}：${row.current_stock}`).join('、')
+    const ok = confirm(remaining.length > 0
+      ? `⚠ 「${productName}」はまだ在庫があります（${stockText}）。\n削除すると、この在庫もなくなります。\n\n本当に削除しますか？（元に戻せません）`
+      : `「${productName}」を削除します。\n元に戻せません。よろしいですか？`)
+    if (!ok) return
+    const { error: deleteError } = await supabase.rpc('delete_stopped_product', { p_id: product.id })
+    if (deleteError) { setError(deleteError.message); return }
+    setMessage(`「${productName}」を削除しました。`)
+    setProducts((previous) => previous.filter((item) => item.id !== product.id))
+  }
+
   if (!authorized) return <div className="flex min-h-[100dvh] items-center justify-center text-gray-400">権限を確認しています...</div>
 
   return (
@@ -528,6 +548,9 @@ export default function ProductManagementPage() {
                       <div className="flex shrink-0 flex-col gap-1.5">
                         <button onClick={() => startEdit(product)} className="rounded-lg bg-blue-50 px-3 py-2 text-xs font-medium text-blue-700">編集</button>
                         <button onClick={() => void setActive(product, !product.is_active)} className={`rounded-lg px-3 py-2 text-xs font-medium ${product.is_active ? 'bg-red-50 text-red-600' : 'bg-green-50 text-green-700'}`}>{product.is_active ? '停止' : '再開'}</button>
+                        {!product.is_active && (
+                          <button onClick={() => void deleteStopped(product)} className="rounded-lg bg-red-500 px-3 py-2 text-xs font-medium text-white">削除</button>
+                        )}
                       </div>
                     </div>
                     <div className="mt-2 flex flex-wrap gap-1.5">
