@@ -28,6 +28,8 @@ type Purchase = {
   unit_price: number
   kind: Kind
   collected_on: string | null
+  handed_on: string | null
+  payout_id: string | null
   note: string | null
 }
 type Payout = { id: string; box: 'safe' | 'dealer'; dealer: string | null; paid_at: string; amount: number; note: string | null }
@@ -108,6 +110,11 @@ export default function StaffPurchasesPage() {
   const [listKind, setListKind] = useState<Kind | 'all'>('all')
   const [listDealer, setListDealer] = useState('all')
   const [onlyUnpaid, setOnlyUnpaid] = useState(false)
+  // ディーラーに渡す：集金済みでまだ渡していない個人発注を選んで渡す
+  const [onlyNotHanded, setOnlyNotHanded] = useState(false)
+  const [handSelection, setHandSelection] = useState<Set<string>>(new Set())
+  const [handAt, setHandAt] = useState(nowLocalInput())
+  const [handing, setHanding] = useState(false)
   const [editingId, setEditingId] = useState<string | null>(null)
   const [editQuantity, setEditQuantity] = useState('')
   const [editPrice, setEditPrice] = useState('')
@@ -152,7 +159,7 @@ export default function StaffPurchasesPage() {
       fetchAll((from, to) => supabase.from('products').select('id, brand, name, cost_price, dealer').eq('is_active', true).order('id').range(from, to)),
       fetchAll((from, to) => supabase.from('store_products').select('store_id, product_id').order('store_id').order('product_id').range(from, to)),
       fetchAll((from, to) => supabase.from('staff_purchases')
-        .select('id, purchased_on, staff_id, store_id, legacy_name, source_ref, product_id, item_name, dealer, quantity, unit_price, kind, collected_on, note')
+        .select('id, purchased_on, staff_id, store_id, legacy_name, source_ref, product_id, item_name, dealer, quantity, unit_price, kind, collected_on, handed_on, payout_id, note')
         .order('purchased_on', { ascending: false }).order('created_at', { ascending: false }).order('id').range(from, to)),
       supabase.from('cash_payouts').select('id, box, dealer, paid_at, amount, note').order('paid_at', { ascending: false }),
       supabase.from('app_settings').select('value').eq('key', 'safe_threshold').maybeSingle(),
@@ -334,7 +341,53 @@ export default function StaffPurchasesPage() {
     await load()
   }
 
+  const canHand = (row: Purchase) => row.kind === 'personal_order' && Boolean(row.collected_on) && !row.handed_on
+  const handRows = purchases.filter((row) => handSelection.has(row.id))
+  const handDealers = Array.from(new Set(handRows.map((row) => row.dealer)))
+  const handTotal = handRows.reduce((sum, row) => sum + row.quantity * row.unit_price, 0)
+
+  function toggleHand(id: string) {
+    setHandSelection((previous) => {
+      const next = new Set(previous)
+      if (next.has(id)) next.delete(id)
+      else next.add(id)
+      return next
+    })
+  }
+
+  async function handToDealer() {
+    setError('')
+    setMessage('')
+    if (handRows.length === 0) return
+    if (handDealers.length !== 1) { setError('1回に渡せるのは1つのディーラー分だけです。選び直してください。'); return }
+    if (!confirm(`${handDealers[0]} に ${yen(handTotal)}（${handRows.length}件）を渡した記録にします。よろしいですか？`)) return
+    setHanding(true)
+    const { error: handError } = await supabase.rpc('hand_to_dealer', {
+      p_ids: handRows.map((row) => row.id), p_paid_at: new Date(`${handAt}:00+09:00`).toISOString(), p_note: null,
+    })
+    setHanding(false)
+    if (handError) { setError(`渡せませんでした：${handError.message}`); return }
+    setMessage(`${handDealers[0]} に ${yen(handTotal)}（${handRows.length}件）を渡しました。`)
+    setHandSelection(new Set())
+    setHandAt(nowLocalInput())
+    await load()
+  }
+
+  async function unhand(row: Purchase) {
+    if (!confirm(`「ディーラーに渡した」を取り消します。\n${rowLabel(row)} ${yen(row.quantity * row.unit_price)}\n渡した記録の金額からも引きます。よろしいですか？`)) return
+    const { error: unhandError } = await supabase.rpc('unhand_purchase', { p_id: row.id })
+    if (unhandError) { setError(`取り消せませんでした：${unhandError.message}`); return }
+    await load()
+  }
+
   async function deletePayout(row: Payout) {
+    if (row.box === 'dealer') {
+      if (!confirm(`この渡した記録を取り消します。\n${row.dealer ?? ''} ${yen(row.amount)}\nつながっている行は「集金済み・まだ渡していない」に戻ります。よろしいですか？`)) return
+      const { error: cancelError } = await supabase.rpc('cancel_dealer_payout', { p_payout_id: row.id })
+      if (cancelError) { setError(`取り消せませんでした：${cancelError.message}`); return }
+      await load()
+      return
+    }
     if (!confirm(`この記録を取り消します。\n${new Date(row.paid_at).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo' })} ${yen(row.amount)}\nよろしいですか？`)) return
     const { error: deleteError } = await supabase.from('cash_payouts').delete().eq('id', row.id)
     if (deleteError) { setError(`取り消せませんでした：${deleteError.message}`); return }
@@ -379,7 +432,8 @@ export default function StaffPurchasesPage() {
     && (listKind === 'all' || row.kind === listKind)
     && (listDealer === 'all' || row.dealer === listDealer)
     && (!onlyUnpaid || (row.kind !== 'legacy' && !row.collected_on))
-  )), [listDealer, listFrom, listKind, listStaff, listTo, onlyUnpaid, purchases])
+    && (!onlyNotHanded || (row.kind === 'personal_order' && row.collected_on && !row.handed_on))
+  )), [onlyNotHanded, listDealer, listFrom, listKind, listStaff, listTo, onlyUnpaid, purchases])
 
   // ディーラーの候補：商品一覧に登録されているディーラーと、これまで個人発注で使ったディーラー
   const dealerNames = useMemo(() => Array.from(new Set([
@@ -408,7 +462,7 @@ export default function StaffPurchasesPage() {
   const listUnpaid = listRows.filter((row) => row.kind !== 'legacy' && !row.collected_on).reduce((sum, row) => sum + row.quantity * row.unit_price, 0)
   // 一覧は20件ずつ。絞り込みを変えたら1ページ目に戻す
   const [listPage, setListPage] = useState(1)
-  useEffect(() => { setListPage(1) }, [listDealer, listFrom, listKind, listStaff, listTo, onlyUnpaid])
+  useEffect(() => { setListPage(1) }, [listDealer, listFrom, listKind, listStaff, listTo, onlyNotHanded, onlyUnpaid])
   const pageCount = Math.max(1, Math.ceil(listRows.length / PAGE_SIZE))
   const currentPage = Math.min(listPage, pageCount)
   const pageRows = listRows.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
@@ -637,13 +691,29 @@ export default function StaffPurchasesPage() {
                 <label className="flex items-center gap-1 pb-2 text-sm text-gray-700">
                   <input type="checkbox" checked={onlyUnpaid} onChange={(event) => setOnlyUnpaid(event.target.checked)} className="h-4 w-4" />未集金のみ
                 </label>
+                <label className="flex items-center gap-1 pb-2 text-sm text-gray-700">
+                  <input type="checkbox" checked={onlyNotHanded} onChange={(event) => setOnlyNotHanded(event.target.checked)} className="h-4 w-4" />ディーラーに未渡しのみ
+                </label>
               </div>
+              {handSelection.size > 0 && (
+                <div className="mt-2 flex flex-wrap items-center gap-2 rounded-xl border border-purple-200 bg-purple-50 px-3 py-2 text-sm">
+                  <span className="font-bold text-purple-800">
+                    {handRows.length}件を選択中（{handDealers.join('・')}）合計 {yen(handTotal)}
+                  </span>
+                  {handDealers.length > 1 && <span className="text-xs text-red-600">1回に渡せるのは1つのディーラー分だけです</span>}
+                  <input type="datetime-local" value={handAt} onChange={(event) => setHandAt(event.target.value)} className="rounded-lg border border-purple-200 bg-white px-2 py-1 text-base" />
+                  <button onClick={() => void handToDealer()} disabled={handing || handDealers.length !== 1}
+                    className="rounded-lg bg-purple-700 px-4 py-1.5 font-bold text-white disabled:bg-gray-300">ディーラーに渡す</button>
+                  <button onClick={() => setHandSelection(new Set())} className="text-xs text-gray-600 underline">選択を外す</button>
+                </div>
+              )}
               <p className="mt-2 text-sm text-gray-600">{listRows.length}件・合計 <b>{yen(listTotal)}</b>・未集金 <b className="text-amber-600">{yen(listUnpaid)}</b></p>
 
               <div className="mt-2 overflow-x-auto">
                 <table className="w-full min-w-max border-collapse text-sm">
                   <thead>
                     <tr className="bg-gray-100 text-xs text-gray-500">
+                      <th className="border border-gray-200 px-1 py-1.5 text-center text-[10px]">渡す</th>
                       <th className="border border-gray-200 px-2 py-1.5 text-left">日付</th>
                       <th className="border border-gray-200 px-2 py-1.5 text-left">スタッフ</th>
                       <th className="border border-gray-200 px-2 py-1.5 text-left">種類</th>
@@ -661,6 +731,7 @@ export default function StaffPurchasesPage() {
                       if (row.kind === 'legacy') {
                         return (
                           <tr key={row.id} className="bg-gray-50/60">
+                            <td className="border border-gray-200"></td>
                             <td className="border border-gray-200 px-2 py-1.5 text-xs">
                               {editing
                                 ? <input type="date" value={editDate} onChange={(event) => setEditDate(event.target.value)} className="w-36 rounded border border-gray-200 px-1 py-0.5 text-base" />
@@ -711,6 +782,9 @@ export default function StaffPurchasesPage() {
                       }
                       return (
                         <tr key={row.id} className={row.collected_on ? '' : 'bg-amber-50/40'}>
+                          <td className="border border-gray-200 px-1 py-1.5 text-center">
+                            {canHand(row) && <input type="checkbox" checked={handSelection.has(row.id)} onChange={() => toggleHand(row.id)} className="h-4 w-4" aria-label="ディーラーに渡す行として選ぶ" />}
+                          </td>
                           <td className="border border-gray-200 px-2 py-1.5 text-xs">{row.purchased_on.slice(5).replace('-', '/')}<span className="ml-1 text-gray-400">{row.store_id !== null ? storeMap.get(row.store_id)?.name : ''}</span></td>
                           <td className="border border-gray-200 px-2 py-1.5">{staffName(row.staff_id, row.legacy_name)}</td>
                           <td className="border border-gray-200 px-2 py-1.5 text-xs">
@@ -734,9 +808,15 @@ export default function StaffPurchasesPage() {
                           <td className="border border-gray-200 px-2 py-1.5 text-right font-medium">{yen(row.quantity * row.unit_price)}</td>
                           <td className="border border-gray-200 px-2 py-1.5 text-center">
                             <label className="flex items-center justify-center gap-1 text-xs">
-                              <input type="checkbox" checked={Boolean(row.collected_on)} onChange={(event) => void setCollectedFor([row.id], event.target.checked)} className="h-4 w-4" />
+                              <input type="checkbox" checked={Boolean(row.collected_on)} disabled={Boolean(row.handed_on)} onChange={(event) => void setCollectedFor([row.id], event.target.checked)} className="h-4 w-4" />
                               {row.collected_on ? <span className="text-gray-500">{row.collected_on.slice(5).replace('-', '/')}</span> : <span className="text-amber-600">未</span>}
                             </label>
+                            {row.handed_on && (
+                              <span className="mt-0.5 block text-[11px] text-purple-700">
+                                渡した {row.handed_on.slice(5).replace('-', '/')}
+                                <button onClick={() => void unhand(row)} className="ml-1 text-gray-400 underline">取消</button>
+                              </span>
+                            )}
                           </td>
                           <td className="border border-gray-200 px-2 py-1.5 text-xs">
                             {editing ? (
@@ -868,13 +948,10 @@ export default function StaffPurchasesPage() {
               )}
             </div>
             <h2 className="font-bold text-gray-800">渡した記録</h2>
-            <p className="mt-1 text-xs text-gray-500">オーナーやディーラーにお金を渡したら登録します。残高から自動で引かれます。</p>
+            <p className="mt-1 text-xs text-gray-500">金庫からオーナーに渡したらここで登録します。ディーラーに渡すときは「登録と一覧」で行を選んで「ディーラーに渡す」を押します（ここに自動で記録されます）。</p>
             <div className="mt-3 grid gap-2 sm:grid-cols-5">
               <label className="text-xs text-gray-500">どこから
-                <select value={payBox} onChange={(event) => setPayBox(event.target.value as 'safe' | 'dealer')} className="mt-1 block w-full rounded-lg border border-gray-200 px-2 py-2 text-base">
-                  <option value="safe">金庫 → オーナー</option>
-                  <option value="dealer">ディーラー支払い用 → ディーラー</option>
-                </select>
+                <p className="mt-1 rounded-lg bg-gray-50 px-2 py-2 text-base text-gray-700">金庫 → オーナー</p>
               </label>
               <label className="text-xs text-gray-500">支払い日時
                 <input type="datetime-local" value={payAt} onChange={(event) => setPayAt(event.target.value)} className="mt-1 block w-full rounded-lg border border-gray-200 px-2 py-2 text-base" />
@@ -892,7 +969,7 @@ export default function StaffPurchasesPage() {
                 <input value={payNote} onChange={(event) => setPayNote(event.target.value)} placeholder="任意" className="mt-1 block w-full rounded-lg border border-gray-200 px-2 py-2 text-base" />
               </label>
             </div>
-            <button onClick={() => void addPayout()} className="mt-3 w-full rounded-xl bg-gray-800 py-3 text-sm font-bold text-white">渡した記録を登録</button>
+            <button onClick={() => void addPayout()} className="mt-3 w-full rounded-xl bg-gray-800 py-3 text-sm font-bold text-white">オーナーに渡した記録を登録</button>
 
             {(['safe', 'dealer'] as const).map((box) => {
               const rows = payouts.filter((row) => row.box === box)
