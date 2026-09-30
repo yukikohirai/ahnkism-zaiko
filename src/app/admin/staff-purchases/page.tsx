@@ -10,14 +10,17 @@ import { withTax, yen } from '@/lib/tax'
 import { todayInTokyo } from '@/lib/presale'
 
 type Store = { id: number; name: string }
-type Staff = { id: number; store_id: number; name: string; sort_order: number }
+type Staff = { id: number; store_id: number | null; name: string; sort_order: number; is_active: boolean }
 type Product = { id: number; brand: string | null; name: string; cost_price: number | null; dealer: string | null }
-type Kind = 'store_stock' | 'personal_order'
+// legacy = 木村さんの集金シートから取り込んだ過去分（在庫・残高には入れない）
+type Kind = 'store_stock' | 'personal_order' | 'legacy'
 type Purchase = {
   id: string
   purchased_on: string
-  staff_id: number
-  store_id: number
+  staff_id: number | null
+  store_id: number | null
+  legacy_name: string | null
+  source_ref: string | null
   product_id: number | null
   item_name: string | null
   dealer: string | null
@@ -28,12 +31,13 @@ type Purchase = {
   note: string | null
 }
 type Payout = { id: string; box: 'safe' | 'dealer'; dealer: string | null; paid_at: string; amount: number; note: string | null }
+type Opening = { id: string; box: 'safe' | 'dealer'; dealer: string | null; amount: number; as_of: string; note: string | null }
 type Tab = 'entry' | 'summary' | 'cash'
 
 // スタッフ購入は2026年10月から
 const START_DATE = '2026-10-01'
 const PAGE_SIZE = 20
-const KIND_LABEL: Record<Kind, string> = { store_stock: '店舗在庫から', personal_order: '個人発注' }
+const KIND_LABEL: Record<Kind, string> = { store_stock: '店舗在庫から', personal_order: '個人発注', legacy: '過去分' }
 const BOX_LABEL = { safe: '金庫（オーナー渡し用）', dealer: 'ディーラー支払い用' }
 
 function normalize(value: string) {
@@ -71,6 +75,7 @@ export default function StaffPurchasesPage() {
   const [assignments, setAssignments] = useState<Set<string>>(new Set())
   const [purchases, setPurchases] = useState<Purchase[]>([])
   const [payouts, setPayouts] = useState<Payout[]>([])
+  const [openings, setOpenings] = useState<Opening[]>([])
   const [threshold, setThreshold] = useState(100000)
   const [thresholdDraft, setThresholdDraft] = useState('')
   const [minDate, setMinDate] = useState(START_DATE)
@@ -108,6 +113,9 @@ export default function StaffPurchasesPage() {
   const [editPrice, setEditPrice] = useState('')
   const [editNote, setEditNote] = useState('')
   const [editDealer, setEditDealer] = useState('')
+  const [editDate, setEditDate] = useState('')
+  const [editStaffId, setEditStaffId] = useState<number | null>(null)
+  const [editItem, setEditItem] = useState('')
 
   // 集計
   const [sumStaff, setSumStaff] = useState<number | null>(null)
@@ -120,6 +128,10 @@ export default function StaffPurchasesPage() {
   const [payAmount, setPayAmount] = useState('')
   const [payNote, setPayNote] = useState('')
   const [payDealer, setPayDealer] = useState('')
+  const [openBox, setOpenBox] = useState<'safe' | 'dealer'>('safe')
+  const [openDealer, setOpenDealer] = useState('')
+  const [openAmount, setOpenAmount] = useState('')
+  const [openAsOf, setOpenAsOf] = useState(todayInTokyo())
 
   useEffect(() => {
     void (async () => {
@@ -133,19 +145,21 @@ export default function StaffPurchasesPage() {
   const load = useCallback(async () => {
     if (!authorized) return
     setLoading(true)
-    const [storeResult, staffResult, productResult, assignmentResult, purchaseResult, payoutResult, settingResult, closedResult] = await Promise.all([
+    const [storeResult, staffResult, productResult, assignmentResult, purchaseResult, payoutResult, settingResult, closedResult, openingResult] = await Promise.all([
       supabase.from('stores').select('id, name').order('sort_order'),
-      supabase.from('staff').select('id, store_id, name, sort_order').eq('is_active', true).order('sort_order').order('id'),
+      // 過去の人（is_active = false）も名前の表示に使う。選択肢には今いる人だけ出す
+      supabase.from('staff').select('id, store_id, name, sort_order, is_active').order('sort_order').order('id'),
       fetchAll((from, to) => supabase.from('products').select('id, brand, name, cost_price, dealer').eq('is_active', true).order('id').range(from, to)),
       fetchAll((from, to) => supabase.from('store_products').select('store_id, product_id').order('store_id').order('product_id').range(from, to)),
       fetchAll((from, to) => supabase.from('staff_purchases')
-        .select('id, purchased_on, staff_id, store_id, product_id, item_name, dealer, quantity, unit_price, kind, collected_on, note')
+        .select('id, purchased_on, staff_id, store_id, legacy_name, source_ref, product_id, item_name, dealer, quantity, unit_price, kind, collected_on, note')
         .order('purchased_on', { ascending: false }).order('created_at', { ascending: false }).order('id').range(from, to)),
       supabase.from('cash_payouts').select('id, box, dealer, paid_at, amount, note').order('paid_at', { ascending: false }),
       supabase.from('app_settings').select('value').eq('key', 'safe_threshold').maybeSingle(),
       supabase.rpc('closed_through'),
+      supabase.from('cash_openings').select('id, box, dealer, amount, as_of, note').order('as_of', { ascending: false }),
     ])
-    if (storeResult.error || staffResult.error || productResult.error || assignmentResult.error || purchaseResult.error || payoutResult.error) {
+    if (storeResult.error || staffResult.error || productResult.error || assignmentResult.error || purchaseResult.error || payoutResult.error || openingResult.error) {
       setError('読み込めませんでした。ページを開き直してください。')
     }
     const storeRows = (storeResult.data ?? []) as Store[]
@@ -156,6 +170,7 @@ export default function StaffPurchasesPage() {
     setAssignments(new Set(((assignmentResult.data ?? []) as { store_id: number; product_id: number }[]).map((row) => `${row.store_id}_${row.product_id}`)))
     setPurchases((purchaseResult.data ?? []) as Purchase[])
     setPayouts((payoutResult.data ?? []) as Payout[])
+    setOpenings((openingResult.data ?? []) as Opening[])
     if (settingResult.data?.value != null) setThreshold(Number(settingResult.data.value))
     if (closedResult.data) {
       const next = new Date(`${closedResult.data}T00:00:00Z`)
@@ -175,10 +190,13 @@ export default function StaffPurchasesPage() {
     const product = productMap.get(id)
     return product ? `${product.brand ? `${product.brand} ` : ''}${product.name}` : `商品#${id}`
   }
-  const rowLabel = (row: { product_id: number | null; item_name: string | null }) => (
-    row.product_id !== null ? productLabel(row.product_id) : `${row.item_name ?? ''}（一覧外）`
+  const rowLabel = (row: { product_id: number | null; item_name: string | null; kind: Kind }) => (
+    row.product_id !== null ? productLabel(row.product_id) : row.kind === 'legacy' ? (row.item_name ?? '（商品名なし）') : `${row.item_name ?? ''}（一覧外）`
   )
-  const staffName = (id: number) => staffMap.get(id)?.name ?? `（名簿にいない #${id}）`
+  const staffName = (id: number | null, legacyName?: string | null) => {
+    if (id !== null) return staffMap.get(id)?.name ?? `（名簿にいない #${id}）`
+    return legacyName ? `${legacyName}（名簿外）` : '名前なし'
+  }
 
   // 預かり金の残高：集金済みの合計 − 渡した合計
   const balances = useMemo(() => {
@@ -186,13 +204,19 @@ export default function StaffPurchasesPage() {
       .filter((row) => row.kind === target && row.collected_on)
       .reduce((sum, row) => sum + row.quantity * row.unit_price, 0)
     const paidOf = (box: 'safe' | 'dealer') => payouts.filter((row) => row.box === box).reduce((sum, row) => sum + row.amount, 0)
+    const openOf = (box: 'safe' | 'dealer') => openings.filter((row) => row.box === box).reduce((sum, row) => sum + row.amount, 0)
+    const safeOpen = openOf('safe')
+    const dealerOpen = openOf('dealer')
     const safeIn = collectedOf('store_stock')
     const dealerIn = collectedOf('personal_order')
     const safeOut = paidOf('safe')
     const dealerOut = paidOf('dealer')
-    const unpaid = purchases.filter((row) => !row.collected_on).reduce((sum, row) => sum + row.quantity * row.unit_price, 0)
-    return { safeIn, safeOut, safe: safeIn - safeOut, dealerIn, dealerOut, dealer: dealerIn - dealerOut, unpaid }
-  }, [payouts, purchases])
+    const unpaid = purchases.filter((row) => row.kind !== 'legacy' && !row.collected_on).reduce((sum, row) => sum + row.quantity * row.unit_price, 0)
+    return {
+      safeOpen, safeIn, safeOut, safe: safeOpen + safeIn - safeOut,
+      dealerOpen, dealerIn, dealerOut, dealer: dealerOpen + dealerIn - dealerOut, unpaid,
+    }
+  }, [openings, payouts, purchases])
 
   const candidates = useMemo(() => {
     const keyword = normalize(search)
@@ -255,9 +279,23 @@ export default function StaffPurchasesPage() {
     setEditPrice(String(row.unit_price))
     setEditNote(row.note ?? '')
     setEditDealer(row.dealer ?? '')
+    setEditDate(row.purchased_on)
+    setEditStaffId(row.staff_id)
+    setEditItem(row.item_name ?? '')
   }
 
   async function saveEdit(row: Purchase) {
+    if (row.kind === 'legacy') {
+      const amount = Number(editPrice.replace(/[,，¥円\s]/g, ''))
+      if (!editDate || !Number.isFinite(amount)) { setError('日付と金額を正しく入力してください。'); return }
+      const { error: legacyError } = await supabase.rpc('update_legacy_purchase', {
+        p_id: row.id, p_purchased_on: editDate, p_staff_id: editStaffId, p_item_name: editItem || null, p_amount: Math.round(amount), p_note: editNote || null,
+      })
+      if (legacyError) { setError(`修正できませんでした：${legacyError.message}`); return }
+      setEditingId(null)
+      await load()
+      return
+    }
     const qty = Number(editQuantity)
     const price = parseYen(editPrice)
     if (!Number.isInteger(qty) || qty <= 0 || price === null) { setError('数と単価を正しく入力してください。'); return }
@@ -271,7 +309,7 @@ export default function StaffPurchasesPage() {
 
   async function cancelPurchase(row: Purchase) {
     const stockNote = row.kind === 'store_stock' ? '\n店舗の在庫も元に戻ります。' : ''
-    if (!confirm(`この記録を取り消します。\n${row.purchased_on} ${staffName(row.staff_id)}：${rowLabel(row)} ×${row.quantity}${stockNote}\nよろしいですか？`)) return
+    if (!confirm(`この記録を取り消します。\n${row.purchased_on} ${staffName(row.staff_id, row.legacy_name)}：${rowLabel(row)} ×${row.quantity}${stockNote}\nよろしいですか？`)) return
     const { error: cancelError } = await supabase.rpc('cancel_staff_purchase', { p_id: row.id })
     if (cancelError) { setError(`取り消せませんでした：${cancelError.message}`); return }
     setEditingId(null)
@@ -303,6 +341,29 @@ export default function StaffPurchasesPage() {
     await load()
   }
 
+  async function addOpening() {
+    setError('')
+    setMessage('')
+    const amount = Number(openAmount.replace(/[,，¥円\s]/g, ''))
+    if (!openAmount.trim() || !Number.isFinite(amount)) { setError('開始残高の金額を入力してください。'); return }
+    if (openBox === 'dealer' && !openDealer.trim()) { setError('どのディーラーの分か選んでください。'); return }
+    const { error: insertError } = await supabase.from('cash_openings').insert({
+      box: openBox, dealer: openBox === 'dealer' ? openDealer.trim() : null, amount: Math.round(amount), as_of: openAsOf,
+    })
+    if (insertError) { setError(`登録できませんでした：${insertError.message}`); return }
+    setMessage(`開始残高 ${yen(Math.round(amount))} を登録しました。`)
+    setOpenAmount('')
+    setOpenDealer('')
+    await load()
+  }
+
+  async function deleteOpening(row: Opening) {
+    if (!confirm(`この開始残高を取り消します。\n${row.box === 'safe' ? '金庫' : `ディーラー支払い用（${row.dealer}）`} ${yen(row.amount)}\nよろしいですか？`)) return
+    const { error: deleteError } = await supabase.from('cash_openings').delete().eq('id', row.id)
+    if (deleteError) { setError(`取り消せませんでした：${deleteError.message}`); return }
+    await load()
+  }
+
   async function saveThreshold() {
     const value = parseYen(thresholdDraft)
     if (!value) { setError('目安額を入力してください。'); return }
@@ -317,7 +378,7 @@ export default function StaffPurchasesPage() {
     && (listStaff === 'all' || row.staff_id === listStaff)
     && (listKind === 'all' || row.kind === listKind)
     && (listDealer === 'all' || row.dealer === listDealer)
-    && (!onlyUnpaid || !row.collected_on)
+    && (!onlyUnpaid || (row.kind !== 'legacy' && !row.collected_on))
   )), [listDealer, listFrom, listKind, listStaff, listTo, onlyUnpaid, purchases])
 
   // ディーラーの候補：商品一覧に登録されているディーラーと、これまで個人発注で使ったディーラー
@@ -332,17 +393,19 @@ export default function StaffPurchasesPage() {
     const names = Array.from(new Set([
       ...purchases.filter((row) => row.kind === 'personal_order' && row.dealer).map((row) => row.dealer!),
       ...payouts.filter((row) => row.box === 'dealer' && row.dealer).map((row) => row.dealer!),
+      ...openings.filter((row) => row.box === 'dealer' && row.dealer).map((row) => row.dealer!),
     ])).sort((a, b) => a.localeCompare(b, 'ja'))
     return names.map((name) => {
       const rows = purchases.filter((row) => row.kind === 'personal_order' && row.dealer === name)
       const ordered = rows.reduce((sum, row) => sum + row.quantity * row.unit_price, 0)
       const collected = rows.filter((row) => row.collected_on).reduce((sum, row) => sum + row.quantity * row.unit_price, 0)
       const paid = payouts.filter((row) => row.box === 'dealer' && row.dealer === name).reduce((sum, row) => sum + row.amount, 0)
-      return { name, ordered, collected, paid, onHand: collected - paid, unpaid: ordered - collected }
+      const opening = openings.filter((row) => row.box === 'dealer' && row.dealer === name).reduce((sum, row) => sum + row.amount, 0)
+      return { name, opening, ordered, collected, paid, onHand: opening + collected - paid, unpaid: ordered - collected }
     })
-  }, [payouts, purchases])
+  }, [openings, payouts, purchases])
   const listTotal = listRows.reduce((sum, row) => sum + row.quantity * row.unit_price, 0)
-  const listUnpaid = listRows.filter((row) => !row.collected_on).reduce((sum, row) => sum + row.quantity * row.unit_price, 0)
+  const listUnpaid = listRows.filter((row) => row.kind !== 'legacy' && !row.collected_on).reduce((sum, row) => sum + row.quantity * row.unit_price, 0)
   // 一覧は20件ずつ。絞り込みを変えたら1ページ目に戻す
   const [listPage, setListPage] = useState(1)
   useEffect(() => { setListPage(1) }, [listDealer, listFrom, listKind, listStaff, listTo, onlyUnpaid])
@@ -359,11 +422,11 @@ export default function StaffPurchasesPage() {
       const item = grouped.get(key) ?? { product_id: row.product_id, item_name: row.item_name, kind: row.kind, unit_price: row.unit_price, quantity: 0, amount: 0, unpaid: 0 }
       item.quantity += row.quantity
       item.amount += row.quantity * row.unit_price
-      if (!row.collected_on) item.unpaid += row.quantity * row.unit_price
+      if (row.kind !== 'legacy' && !row.collected_on) item.unpaid += row.quantity * row.unit_price
       grouped.set(key, item)
     })
     const total = rows.reduce((sum, row) => sum + row.quantity * row.unit_price, 0)
-    const unpaidRows = rows.filter((row) => !row.collected_on)
+    const unpaidRows = rows.filter((row) => row.kind !== 'legacy' && !row.collected_on)
     const unpaid = unpaidRows.reduce((sum, row) => sum + row.quantity * row.unit_price, 0)
     return { items: Array.from(grouped.values()), total, unpaid, collected: total - unpaid, unpaidIds: unpaidRows.map((row) => row.id) }
   }, [purchases, sumFrom, sumStaff, sumTo])
@@ -371,7 +434,7 @@ export default function StaffPurchasesPage() {
   const staffOptions = (
     <>
       {stores.map((store) => {
-        const members = staff.filter((person) => person.store_id === store.id)
+        const members = staff.filter((person) => person.is_active && person.store_id === store.id)
         if (members.length === 0) return null
         return (
           <optgroup key={store.id} label={store.name}>
@@ -379,6 +442,19 @@ export default function StaffPurchasesPage() {
           </optgroup>
         )
       })}
+    </>
+  )
+
+  // 過去分の修正では、今いる人に加えて過去の人も選べる
+  const pastStaff = staff.filter((person) => !person.is_active || person.store_id === null)
+  const allStaffOptions = (
+    <>
+      {staffOptions}
+      {pastStaff.length > 0 && (
+        <optgroup label="過去の人">
+          {pastStaff.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}
+        </optgroup>
+      )}
     </>
   )
 
@@ -401,7 +477,7 @@ export default function StaffPurchasesPage() {
           <div className={`rounded-2xl border p-4 shadow-sm ${overThreshold ? 'border-red-300 bg-red-50' : 'border-gray-200 bg-white'}`}>
             <p className="text-xs text-gray-500">金庫（オーナー渡し用）の残高</p>
             <p className={`text-2xl font-bold ${overThreshold ? 'text-red-600' : 'text-gray-800'}`}>{yen(balances.safe)}</p>
-            <p className="mt-1 text-[11px] text-gray-400">集金 {yen(balances.safeIn)} − 渡した {yen(balances.safeOut)}</p>
+            <p className="mt-1 text-[11px] text-gray-400">開始 {yen(balances.safeOpen)} ＋ 集金 {yen(balances.safeIn)} − 渡した {yen(balances.safeOut)}</p>
             {overThreshold && <p className="mt-1 text-xs font-bold text-red-600">目安 {yen(threshold)} を超えています。オーナーに渡してください</p>}
             <div className="mt-2 flex items-center gap-1 text-[11px] text-gray-500">
               目安 {yen(threshold)}
@@ -413,7 +489,7 @@ export default function StaffPurchasesPage() {
           <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
             <p className="text-xs text-gray-500">ディーラー支払い用の残高</p>
             <p className="text-2xl font-bold text-gray-800">{yen(balances.dealer)}</p>
-            <p className="mt-1 text-[11px] text-gray-400">集金 {yen(balances.dealerIn)} − 渡した {yen(balances.dealerOut)}</p>
+            <p className="mt-1 text-[11px] text-gray-400">開始 {yen(balances.dealerOpen)} ＋ 集金 {yen(balances.dealerIn)} − 渡した {yen(balances.dealerOut)}</p>
           </div>
           <div className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
             <p className="text-xs text-gray-500">まだ集金していない金額（全員）</p>
@@ -537,6 +613,7 @@ export default function StaffPurchasesPage() {
               <div className="mt-2 flex flex-wrap items-end gap-2 text-xs text-gray-500">
                 <label>いつから<input type="date" value={listFrom} onChange={(event) => setListFrom(event.target.value)} className="block rounded-lg border border-gray-200 px-2 py-1.5 text-base" /></label>
                 <label>いつまで<input type="date" value={listTo} onChange={(event) => setListTo(event.target.value)} className="block rounded-lg border border-gray-200 px-2 py-1.5 text-base" /></label>
+                <button onClick={() => { setListFrom('2000-01-01'); setListTo('2099-12-31') }} className="mb-0.5 rounded-lg border border-gray-300 px-3 py-1.5 text-sm text-gray-700">全期間</button>
                 <label>スタッフ
                   <select value={listStaff} onChange={(event) => setListStaff(event.target.value === 'all' ? 'all' : Number(event.target.value))} className="block rounded-lg border border-gray-200 px-2 py-1.5 text-base">
                     <option value="all">全員</option>
@@ -548,6 +625,7 @@ export default function StaffPurchasesPage() {
                     <option value="all">すべて</option>
                     <option value="store_stock">店舗在庫から</option>
                     <option value="personal_order">個人発注</option>
+                    <option value="legacy">過去分</option>
                   </select>
                 </label>
                 <label>ディーラー
@@ -580,10 +658,61 @@ export default function StaffPurchasesPage() {
                   <tbody>
                     {pageRows.map((row) => {
                       const editing = editingId === row.id
+                      if (row.kind === 'legacy') {
+                        return (
+                          <tr key={row.id} className="bg-gray-50/60">
+                            <td className="border border-gray-200 px-2 py-1.5 text-xs">
+                              {editing
+                                ? <input type="date" value={editDate} onChange={(event) => setEditDate(event.target.value)} className="w-36 rounded border border-gray-200 px-1 py-0.5 text-base" />
+                                : row.purchased_on.replaceAll('-', '/')}
+                            </td>
+                            <td className="border border-gray-200 px-2 py-1.5">
+                              {editing ? (
+                                <select value={editStaffId ?? ''} onChange={(event) => setEditStaffId(event.target.value ? Number(event.target.value) : null)} className="w-28 rounded border border-gray-200 px-1 py-0.5 text-base">
+                                  <option value="">名前なし</option>
+                                  {allStaffOptions}
+                                </select>
+                              ) : staffName(row.staff_id, row.legacy_name)}
+                            </td>
+                            <td className="border border-gray-200 px-2 py-1.5 text-xs"><span className="rounded bg-gray-200 px-1.5 py-0.5 text-gray-700">過去分</span></td>
+                            <td className="border border-gray-200 px-2 py-1.5">
+                              {editing ? (
+                                <>
+                                  <input value={editItem} onChange={(event) => setEditItem(event.target.value)} placeholder="商品名" className="block w-full rounded border border-gray-200 px-1 py-0.5 text-base" />
+                                  <input value={editNote} onChange={(event) => setEditNote(event.target.value)} placeholder="メモ" className="mt-1 block w-full rounded border border-gray-200 px-1 py-0.5 text-base" />
+                                </>
+                              ) : (
+                                <>
+                                  {rowLabel(row)}
+                                  {row.note && <span className="block text-[11px] text-gray-400">{row.note}</span>}
+                                  {row.source_ref && <span className="block text-[10px] text-gray-300">シート {row.source_ref}</span>}
+                                </>
+                              )}
+                            </td>
+                            <td className="border border-gray-200 px-2 py-1.5 text-right text-gray-300">−</td>
+                            <td className="border border-gray-200 px-2 py-1.5 text-right text-gray-300">−</td>
+                            <td className={`border border-gray-200 px-2 py-1.5 text-right font-medium ${row.unit_price < 0 ? 'text-red-600' : ''}`}>
+                              {editing ? <input value={editPrice} onChange={(event) => setEditPrice(event.target.value)} inputMode="numeric" className="w-24 rounded border border-gray-200 px-1 py-0.5 text-right text-base" /> : yen(row.unit_price)}
+                            </td>
+                            <td className="border border-gray-200 px-2 py-1.5 text-center text-xs text-gray-400">過去分</td>
+                            <td className="border border-gray-200 px-2 py-1.5 text-xs">
+                              {editing ? (
+                                <div className="flex gap-1">
+                                  <button onClick={() => void saveEdit(row)} className="rounded bg-blue-600 px-2 py-1 text-white">保存</button>
+                                  <button onClick={() => void cancelPurchase(row)} className="rounded bg-red-50 px-2 py-1 text-red-600">削除</button>
+                                  <button onClick={() => setEditingId(null)} className="rounded bg-gray-100 px-2 py-1 text-gray-600">閉じる</button>
+                                </div>
+                              ) : (
+                                <button onClick={() => startEdit(row)} className="rounded bg-gray-100 px-2 py-1 text-gray-600">修正</button>
+                              )}
+                            </td>
+                          </tr>
+                        )
+                      }
                       return (
                         <tr key={row.id} className={row.collected_on ? '' : 'bg-amber-50/40'}>
-                          <td className="border border-gray-200 px-2 py-1.5 text-xs">{row.purchased_on.slice(5).replace('-', '/')}<span className="ml-1 text-gray-400">{storeMap.get(row.store_id)?.name}</span></td>
-                          <td className="border border-gray-200 px-2 py-1.5">{staffName(row.staff_id)}</td>
+                          <td className="border border-gray-200 px-2 py-1.5 text-xs">{row.purchased_on.slice(5).replace('-', '/')}<span className="ml-1 text-gray-400">{row.store_id !== null ? storeMap.get(row.store_id)?.name : ''}</span></td>
+                          <td className="border border-gray-200 px-2 py-1.5">{staffName(row.staff_id, row.legacy_name)}</td>
                           <td className="border border-gray-200 px-2 py-1.5 text-xs">
                             <span className={`rounded px-1.5 py-0.5 ${row.kind === 'store_stock' ? 'bg-green-50 text-green-700' : 'bg-purple-50 text-purple-700'}`}>{KIND_LABEL[row.kind]}</span>
                             {row.kind === 'personal_order' && (editing
@@ -702,6 +831,42 @@ export default function StaffPurchasesPage() {
 
         {!loading && tab === 'cash' && (
           <section className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
+            <div className="mb-5 rounded-xl border border-gray-200 bg-gray-50 p-3">
+              <h3 className="text-sm font-bold text-gray-800">開始残高（使い始めた時点で手元にあったお金）</h3>
+              <p className="mt-0.5 text-xs text-gray-500">過去分（シートから取り込んだ記録）は残高に入れていません。使い始めた時点の金庫・ディーラー支払い用の残高をここに入れます。</p>
+              <div className="mt-2 grid gap-2 sm:grid-cols-4">
+                <label className="text-xs text-gray-500">どこ
+                  <select value={openBox} onChange={(event) => setOpenBox(event.target.value as 'safe' | 'dealer')} className="mt-1 block w-full rounded-lg border border-gray-200 px-2 py-2 text-base">
+                    <option value="safe">金庫（オーナー渡し用）</option>
+                    <option value="dealer">ディーラー支払い用</option>
+                  </select>
+                </label>
+                {openBox === 'dealer' && (
+                  <label className="text-xs text-gray-500">ディーラー
+                    <input list="dealer-names" value={openDealer} onChange={(event) => setOpenDealer(event.target.value)} className="mt-1 block w-full rounded-lg border border-gray-200 px-2 py-2 text-base" />
+                  </label>
+                )}
+                <label className="text-xs text-gray-500">金額
+                  <input value={openAmount} onChange={(event) => setOpenAmount(event.target.value)} inputMode="numeric" className="mt-1 block w-full rounded-lg border border-gray-200 px-2 py-2 text-right text-base" />
+                </label>
+                <label className="text-xs text-gray-500">いつ時点
+                  <input type="date" value={openAsOf} onChange={(event) => setOpenAsOf(event.target.value)} className="mt-1 block w-full rounded-lg border border-gray-200 px-2 py-2 text-base" />
+                </label>
+              </div>
+              <button onClick={() => void addOpening()} className="mt-2 rounded-lg bg-gray-800 px-4 py-2 text-sm font-bold text-white">開始残高を登録</button>
+              {openings.length > 0 && (
+                <ul className="mt-2 space-y-1 text-sm">
+                  {openings.map((row) => (
+                    <li key={row.id} className="flex items-center gap-3">
+                      <span>{row.as_of.replaceAll('-', '/')} 時点</span>
+                      <span className="text-gray-600">{row.box === 'safe' ? '金庫' : `ディーラー支払い用（${row.dealer}）`}</span>
+                      <b>{yen(row.amount)}</b>
+                      <button onClick={() => void deleteOpening(row)} className="text-xs text-red-500">取消</button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
             <h2 className="font-bold text-gray-800">渡した記録</h2>
             <p className="mt-1 text-xs text-gray-500">オーナーやディーラーにお金を渡したら登録します。残高から自動で引かれます。</p>
             <div className="mt-3 grid gap-2 sm:grid-cols-5">
@@ -735,7 +900,7 @@ export default function StaffPurchasesPage() {
                 <div key={box} className="mt-5">
                   <h3 className="text-sm font-bold text-gray-700">{BOX_LABEL[box]}</h3>
                   <p className="text-xs text-gray-500">
-                    集金 {yen(box === 'safe' ? balances.safeIn : balances.dealerIn)} − 渡した {yen(box === 'safe' ? balances.safeOut : balances.dealerOut)} ＝ 残高 <b className="text-gray-800">{yen(box === 'safe' ? balances.safe : balances.dealer)}</b>
+                    開始 {yen(box === 'safe' ? balances.safeOpen : balances.dealerOpen)} ＋ 集金 {yen(box === 'safe' ? balances.safeIn : balances.dealerIn)} − 渡した {yen(box === 'safe' ? balances.safeOut : balances.dealerOut)} ＝ 残高 <b className="text-gray-800">{yen(box === 'safe' ? balances.safe : balances.dealer)}</b>
                   </p>
                   {box === 'dealer' && (
                     <div className="mt-2 overflow-x-auto">
@@ -744,6 +909,7 @@ export default function StaffPurchasesPage() {
                         <thead>
                           <tr className="bg-purple-50 text-xs text-purple-800">
                             <th className="border border-gray-200 px-2 py-1.5 text-left">ディーラー</th>
+                            <th className="border border-gray-200 px-2 py-1.5 text-right">開始残高</th>
                             <th className="border border-gray-200 px-2 py-1.5 text-right">注文の合計</th>
                             <th className="border border-gray-200 px-2 py-1.5 text-right">集金済み</th>
                             <th className="border border-gray-200 px-2 py-1.5 text-right">渡した</th>
@@ -755,6 +921,7 @@ export default function StaffPurchasesPage() {
                           {dealerSummary.map((row) => (
                             <tr key={row.name}>
                               <td className="border border-gray-200 px-2 py-1.5 font-medium">{row.name}</td>
+                              <td className="border border-gray-200 px-2 py-1.5 text-right">{row.opening ? yen(row.opening) : '−'}</td>
                               <td className="border border-gray-200 px-2 py-1.5 text-right">{yen(row.ordered)}</td>
                               <td className="border border-gray-200 px-2 py-1.5 text-right">{yen(row.collected)}</td>
                               <td className="border border-gray-200 px-2 py-1.5 text-right">{yen(row.paid)}</td>
