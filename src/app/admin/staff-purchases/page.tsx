@@ -92,9 +92,10 @@ export default function StaffPurchasesPage() {
   const [date, setDate] = useState(today < START_DATE ? START_DATE : today)
   const [storeId, setStoreId] = useState<number | null>(null)
   const [staffId, setStaffId] = useState<number | null>(null)
-  const [kind, setKind] = useState<Kind>('store_stock')
+  // 在庫と集金先は最初は未選択（そのまま登録してしまわないように、毎回選ぶ）
+  const [kind, setKind] = useState<Kind | null>(null)
   // 店舗在庫から引くか（集金先とは別に選ぶ）
-  const [deduct, setDeduct] = useState(true)
+  const [deduct, setDeduct] = useState<boolean | null>(null)
   const [search, setSearch] = useState('')
   const [productId, setProductId] = useState<number | null>(null)
   // 個人発注で商品一覧にない商品は、商品名を手で書く
@@ -103,7 +104,7 @@ export default function StaffPurchasesPage() {
   const [dealer, setDealer] = useState('')
   // 商品「その他」を選んだときの中身（例：ヘアオイル試供品）
   const [itemDetail, setItemDetail] = useState('')
-  const [quantity, setQuantity] = useState('1')
+  const [quantity, setQuantity] = useState('')
   const [unitPrice, setUnitPrice] = useState('')
   const [collected, setCollected] = useState(false)
   const [note, setNote] = useState('')
@@ -258,7 +259,9 @@ export default function StaffPurchasesPage() {
     setMessage('')
     const qty = Number(quantity)
     const price = parseYen(unitPrice)
-    const useFreeItem = !deduct && freeItem
+    if (deduct === null) { setError('在庫から引くかどうかを選んでください。'); return }
+    if (kind === null) { setError('集金先を選んでください。'); return }
+    const useFreeItem = deduct === false && freeItem
     if (!storeId || !staffId) { setError('店舗とスタッフを選んでください。'); return }
     if (kind === 'personal_order' && !dealer.trim()) { setError('ディーラー支払いのときは、ディーラーを選んでください。'); return }
     if (useFreeItem ? !itemName.trim() : !productId) { setError(useFreeItem ? '商品名を入力してください。' : '商品を選んでください。'); return }
@@ -280,7 +283,9 @@ export default function StaffPurchasesPage() {
     setProductId(null)
     setItemName('')
     setItemDetail('')
-    setQuantity('1')
+    setQuantity('')
+    setDeduct(null)
+    setKind(null)
     setUnitPrice('')
     setNote('')
     setCollected(false)
@@ -621,50 +626,55 @@ export default function StaffPurchasesPage() {
           <>
             <section className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
               <h2 className="font-bold text-gray-800">購入を登録</h2>
-              <div className="mt-3 grid gap-2 sm:grid-cols-2">
-                <div>
-                  <p className="text-xs text-gray-500">在庫</p>
-                  <div className="mt-1 flex rounded-lg bg-gray-100 p-0.5 text-sm font-medium">
-                    {([[true, '店舗在庫から引く'], [false, '在庫から引かない']] as [boolean, string][]).map(([value, text]) => (
-                      <button key={text} disabled={value && isOther(productId)} onClick={() => { setDeduct(value); setProductId(null); setFreeItem(false) }}
-                        className={`flex-1 rounded-md px-3 py-2 ${deduct === value ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500'}`}>
-                        {text}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <p className="text-xs text-gray-500">集金先</p>
-                  <div className="mt-1 flex rounded-lg bg-gray-100 p-0.5 text-sm font-medium">
-                    {(['store_stock', 'personal_order'] as Kind[]).map((value) => (
-                      <button key={value} onClick={() => setKind(value)}
-                        className={`flex-1 rounded-md px-3 py-2 ${kind === value ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500'}`}>
-                        {KIND_LABEL[value]}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-              <div className="mt-3 grid gap-2 sm:grid-cols-3">
-                <label className="text-xs text-gray-500">日付
-                  <input type="date" value={date} min={minDate} onChange={(event) => setDate(event.target.value)} className="mt-1 block w-full rounded-lg border border-gray-200 px-2 py-2 text-base" />
-                </label>
-                <label className="text-xs text-gray-500">{deduct ? '在庫を引く店舗' : '店舗'}
-                  <select value={storeId ?? ''} onChange={(event) => { setStoreId(Number(event.target.value)); setProductId(null) }} className="mt-1 block w-full rounded-lg border border-gray-200 px-2 py-2 text-base">
-                    {stores.map((store) => <option key={store.id} value={store.id}>{store.name}</option>)}
-                  </select>
-                </label>
+
+              {/* ① 誰が */}
+              <p className="mt-3 text-sm font-bold text-gray-700">① 誰が・いつ</p>
+              <div className="mt-1 grid gap-2 sm:grid-cols-2">
                 <label className="text-xs text-gray-500">スタッフ
-                  <select value={staffId ?? ''} onChange={(event) => setStaffId(event.target.value ? Number(event.target.value) : null)} className="mt-1 block w-full rounded-lg border border-gray-200 px-2 py-2 text-base">
+                  <select value={staffId ?? ''} onChange={(event) => {
+                    const id = event.target.value ? Number(event.target.value) : null
+                    setStaffId(id)
+                    // 店舗はスタッフの所属店舗を最初に入れておく（変えられる）
+                    const home = id !== null ? staffMap.get(id)?.store_id : null
+                    if (home) { setStoreId(home); setProductId(null) }
+                  }} className="mt-1 block w-full rounded-lg border border-gray-200 px-2 py-2 text-base">
                     <option value="">選んでください</option>
                     {staffOptions}
                   </select>
                 </label>
+                <label className="text-xs text-gray-500">日付
+                  <input type="date" value={date} min={minDate} onChange={(event) => setDate(event.target.value)} className="mt-1 block w-full rounded-lg border border-gray-200 px-2 py-2 text-base" />
+                </label>
               </div>
 
-              <div className="mt-3">
+              {/* ② 在庫 */}
+              <p className="mt-4 text-sm font-bold text-gray-700">② 店舗の在庫から引きますか？</p>
+              <div className="mt-1 grid grid-cols-2 gap-2">
+                {([[true, '在庫から引く', '店舗で発注した在庫を売った'], [false, '在庫から引かない', 'スタッフ用に発注してそのまま渡した など']] as [boolean, string, string][]).map(([value, text, hint]) => (
+                  <button key={text} disabled={value && isOther(productId)} onClick={() => { setDeduct(value); setProductId(null); setFreeItem(false) }}
+                    className={`rounded-xl border-2 px-3 py-2.5 text-left disabled:opacity-40 ${deduct === value ? 'border-blue-500 bg-blue-50' : 'border-gray-200 bg-white'}`}>
+                    <span className={`block text-sm font-bold ${deduct === value ? 'text-blue-800' : 'text-gray-700'}`}>{deduct === value ? '● ' : '○ '}{text}</span>
+                    <span className="block text-[11px] text-gray-500">{hint}</span>
+                  </button>
+                ))}
+              </div>
+              {deduct !== null && (
+                <label className="mt-2 block text-xs text-gray-500">{deduct ? '在庫を引く店舗' : '店舗（記録用）'}
+                  <select value={storeId ?? ''} onChange={(event) => { setStoreId(Number(event.target.value)); setProductId(null) }} className="mt-1 block w-full rounded-lg border border-gray-200 px-2 py-2 text-base sm:w-64">
+                    {stores.map((store) => <option key={store.id} value={store.id}>{store.name}</option>)}
+                  </select>
+                </label>
+              )}
+
+              {/* ③ 商品 */}
+              <p className="mt-4 text-sm font-bold text-gray-700">③ 何を・いくつ</p>
+              {deduct === null ? (
+                <p className="mt-1 rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-400">先に②を選ぶと、商品を選べます</p>
+              ) : (
+              <>
+              <div className="mt-1">
                 <p className="text-xs text-gray-500">商品{deduct && '（この店舗の取扱商品から）'}</p>
-                {!deduct && freeItem ? (
+                {deduct === false && freeItem ? (
                   <div className="mt-1">
                     <input value={itemName} onChange={(event) => setItemName(event.target.value)} placeholder="商品名（ブランドも一緒に）"
                       className="block w-full rounded-lg border border-purple-300 bg-purple-50/40 px-3 py-2 text-base outline-none focus:border-purple-500" />
@@ -700,7 +710,7 @@ export default function StaffPurchasesPage() {
                       </ul>
                     )}
                     {normalize(search) && candidates.length === 0 && <p className="mt-1 text-xs text-gray-400">見つかりません</p>}
-                    {!deduct && (
+                    {deduct === false && (
                       <button onClick={() => { setFreeItem(true); setItemName(search); setSearch(''); setUnitPrice('') }} className="mt-1 text-xs text-purple-700 underline">
                         一覧にない商品を入力する
                       </button>
@@ -708,16 +718,10 @@ export default function StaffPurchasesPage() {
                   </>
                 )}
               </div>
-
-              {kind === 'personal_order' && (
-                <label className="mt-3 block text-xs text-gray-500">ディーラー（一覧から選ぶか、入力）
-                  <input list="dealer-names" value={dealer} onChange={(event) => setDealer(event.target.value)} placeholder="例：きくや"
-                    className="mt-1 block w-full rounded-lg border border-gray-200 px-3 py-2 text-base sm:w-64" />
-                </label>
-              )}
-              <div className="mt-3 grid grid-cols-2 gap-2 sm:grid-cols-4">
+              <div className="mt-2 grid grid-cols-3 gap-2">
                 <label className="text-xs text-gray-500">数
-                  <input value={quantity} onChange={(event) => setQuantity(event.target.value)} inputMode="numeric" className="mt-1 block w-full rounded-lg border border-gray-200 px-2 py-2 text-right text-base" />
+                  <input value={quantity} onChange={(event) => setQuantity(event.target.value.normalize('NFKC').replace(/[^0-9]/g, ''))} inputMode="numeric" placeholder="数"
+                    className="mt-1 block w-full rounded-lg border border-gray-200 px-2 py-2 text-right text-base" />
                 </label>
                 <label className="text-xs text-gray-500">単価（税込）
                   <input value={unitPrice} onChange={(event) => setUnitPrice(event.target.value)} inputMode="numeric" placeholder={selectedProduct && selectedProduct.cost_price === null ? '仕入れ値なし・入力' : ''}
@@ -728,16 +732,63 @@ export default function StaffPurchasesPage() {
                     {parseYen(unitPrice) !== null && Number(quantity) > 0 ? yen(parseYen(unitPrice)! * Number(quantity)) : '−'}
                   </p>
                 </div>
-                <label className="flex items-end gap-2 pb-2 text-sm text-gray-700">
+              </div>
+              </>
+              )}
+
+              {/* ④ 集金先 */}
+              <p className="mt-4 text-sm font-bold text-gray-700">④ 集金したお金はどこへ？</p>
+              <div className="mt-1 grid grid-cols-2 gap-2">
+                {([['store_stock', '金庫（オーナー渡し）', '店舗のお金で買ったもの'], ['personal_order', 'ディーラー支払い', 'ディーラーに渡すお金']] as [Kind, string, string][]).map(([value, text, hint]) => (
+                  <button key={value} onClick={() => setKind(value)}
+                    className={`rounded-xl border-2 px-3 py-2.5 text-left ${kind === value ? (value === 'store_stock' ? 'border-green-500 bg-green-50' : 'border-purple-500 bg-purple-50') : 'border-gray-200 bg-white'}`}>
+                    <span className={`block text-sm font-bold ${kind === value ? (value === 'store_stock' ? 'text-green-800' : 'text-purple-800') : 'text-gray-700'}`}>{kind === value ? '● ' : '○ '}{text}</span>
+                    <span className="block text-[11px] text-gray-500">{hint}</span>
+                  </button>
+                ))}
+              </div>
+              {kind === 'personal_order' && (
+                <label className="mt-2 block text-xs text-gray-500">ディーラー（一覧から選ぶか、入力）
+                  <input list="dealer-names" value={dealer} onChange={(event) => setDealer(event.target.value)} placeholder="例：きくや"
+                    className="mt-1 block w-full rounded-lg border border-gray-200 px-3 py-2 text-base sm:w-64" />
+                </label>
+              )}
+              <div className="mt-3 flex flex-wrap items-center gap-3">
+                <label className="flex items-center gap-2 text-sm text-gray-700">
                   <input type="checkbox" checked={collected} onChange={(event) => setCollected(event.target.checked)} className="h-5 w-5" />
                   その場で集金した
                 </label>
+                <input value={note} onChange={(event) => setNote(event.target.value)} placeholder="メモ（任意）"
+                  className="block min-w-0 flex-1 rounded-lg border border-gray-200 px-3 py-2 text-base" />
               </div>
-              <input value={note} onChange={(event) => setNote(event.target.value)} placeholder="メモ（任意）"
-                className="mt-2 block w-full rounded-lg border border-gray-200 px-3 py-2 text-base" />
-              <button onClick={() => void addPurchase()} disabled={saving}
+
+              {/* 確認 */}
+              {(() => {
+                const qty = Number(quantity) || 0
+                const price = parseYen(unitPrice)
+                const productText = deduct === false && freeItem ? (itemName.trim() || '（商品名）') : selectedProduct ? `${productLabel(selectedProduct.id)}${isOther(selectedProduct.id) && itemDetail.trim() ? `（${itemDetail.trim()}）` : ''}` : null
+                const missing = [
+                  staffId === null && 'スタッフ', deduct === null && '在庫', !productText && '商品', qty <= 0 && '数', price === null && '単価', kind === null && '集金先',
+                  kind === 'personal_order' && !dealer.trim() && 'ディーラー',
+                ].filter(Boolean) as string[]
+                return (
+                  <div className={`mt-4 rounded-xl px-3 py-2.5 text-sm ${missing.length === 0 ? 'border border-blue-200 bg-blue-50 text-blue-900' : 'bg-gray-50 text-gray-500'}`}>
+                    {missing.length === 0 ? (
+                      <>
+                        <b>{staffName(staffId)}</b>さん：{productText} ×{qty}　<b>{yen(qty * price!)}</b>
+                        <span className="block text-xs">
+                          {deduct ? `${storeMap.get(storeId ?? -1)?.name ?? ''}の在庫から${qty}個引く` : '在庫は動かさない'}
+                          ／集金先：{kind === 'store_stock' ? '金庫（オーナー渡し）' : `ディーラー支払い（${dealer.trim()}）`}
+                          {collected ? '／その場で集金済み' : '／まだ集金していない'}
+                        </span>
+                      </>
+                    ) : `まだ入っていない項目：${missing.join('・')}`}
+                  </div>
+                )
+              })()}
+              <button onClick={() => void addPurchase()} disabled={saving || deduct === null || kind === null}
                 className="mt-3 w-full rounded-xl bg-blue-600 py-3 text-sm font-bold text-white disabled:bg-gray-300">
-                {saving ? '登録しています...' : '登録する'}
+                {saving ? '登録しています...' : deduct === null || kind === null ? '②在庫と④集金先を選ぶと登録できます' : 'この内容で登録する'}
               </button>
             </section>
 
