@@ -59,6 +59,8 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
   const [draft, setDraft] = useState<Draft>(emptyDraft(storeId))
   const [filterStore, setFilterStore] = useState<number | 'all'>('all')
   const [search, setSearch] = useState('')
+  // 予約の各行の商品検索（行番号ごと）
+  const [lineSearch, setLineSearch] = useState<Record<number, string>>({})
   const [onlyOpen, setOnlyOpen] = useState(false)
   const [saving, setSaving] = useState(false)
   const [busyId, setBusyId] = useState('')
@@ -181,6 +183,7 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
     setMessage(draft.id ? '予約を修正しました。' : `${draft.customer_name.trim()}様の予約を登録しました（${yen(estimate.total)}）。`)
     // 続けて入力しやすいよう、日付とお勧めしたスタッフは残す
     setDraft((previous) => ({ ...emptyDraft(storeId), store_id: previous.store_id, reserved_on: previous.reserved_on, staff_id: previous.staff_id }))
+    setLineSearch({})
     await load()
   }
 
@@ -297,6 +300,9 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
             return (
               <div key={index} className="rounded-xl border border-gray-100 bg-gray-50 p-2">
                 <div className="flex gap-2">
+                  <input value={lineSearch[index] ?? ''} onChange={(event) => setLineSearch((previous) => ({ ...previous, [index]: event.target.value }))}
+                    placeholder="商品を検索" aria-label="商品を検索"
+                    className="w-24 shrink-0 rounded-lg border border-gray-200 bg-white px-2 py-2 text-base sm:w-36" />
                   <select value={line.product_id} onChange={(event) => setLine(index, { product_id: event.target.value })}
                     className="min-w-0 flex-1 rounded-lg border border-gray-200 bg-white px-2 py-2 text-base">
                     <option value="">商品を選ぶ</option>
@@ -306,9 +312,24 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
                   </select>
                   <input inputMode="numeric" value={line.quantity} onChange={(event) => setLine(index, { quantity: event.target.value })}
                     className="w-16 rounded-lg border border-gray-200 bg-white px-2 py-2 text-center text-base font-bold" />
-                  <button onClick={() => setDraft((previous) => ({ ...previous, lines: previous.lines.length > 1 ? previous.lines.filter((_, i) => i !== index) : [{ product_id: '', quantity: '1', discount_type: '', discount_value: '' }] }))}
+                  <button onClick={() => { setLineSearch({}); setDraft((previous) => ({ ...previous, lines: previous.lines.length > 1 ? previous.lines.filter((_, i) => i !== index) : [{ product_id: '', quantity: '1', discount_type: '', discount_value: '' }] })) }}
                     className="shrink-0 rounded-lg px-2 text-lg text-gray-400" aria-label="この行を削除">×</button>
                 </div>
+                {normalize(lineSearch[index] ?? '') && (() => {
+                  const keyword = normalize(lineSearch[index] ?? '')
+                  const matches = sortedItems.filter((option) => normalize(`${option.brand ?? ''}${option.name}`).includes(keyword)).slice(0, 10)
+                  return (
+                    <div className="mt-1 rounded-lg border border-gray-200 bg-white">
+                      {matches.length === 0 && <p className="px-3 py-2 text-xs text-gray-400">見つかりません</p>}
+                      {matches.map((option) => (
+                        <button key={option.product_id} onClick={() => { setLine(index, { product_id: String(option.product_id) }); setLineSearch((previous) => ({ ...previous, [index]: '' })) }}
+                          className="block w-full border-b border-gray-100 px-3 py-2 text-left text-sm last:border-b-0 hover:bg-pink-50">
+                          {option.brand && <span className="text-gray-400">{option.brand} </span>}{option.name}
+                        </button>
+                      ))}
+                    </div>
+                  )
+                })()}
                 {item && (
                   <div className="mt-1 flex flex-wrap items-center gap-1.5 px-1 text-xs">
                     <span className="text-gray-400">この行だけの割引</span>
