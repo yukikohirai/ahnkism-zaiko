@@ -8,6 +8,7 @@ import { supabase } from '@/lib/supabase'
 import { fetchAll } from '@/lib/fetchAll'
 import { withoutTax, yen } from '@/lib/tax'
 import ReservationPanel from '@/components/presale/ReservationPanel'
+import ItemOrderSettings from './ItemOrderSettings'
 import {
   discountedPrice, regularPriceWithTax,
   type BulkTier, type DiscountType, type PresaleCampaign, type PresaleItem, type Staff, type StaffGoal,
@@ -17,9 +18,9 @@ type Store = { id: number; name: string }
 type Category = { id: number; name: string; sort_order: number }
 type RetailProduct = { id: number; category_id: number; brand: string | null; name: string; sale_price: number | null }
 type Assignment = { store_id: number; product_id: number; sort_order: number }
-type Tab = 'items' | 'reservations' | 'stock' | 'staff' | 'access'
+type Tab = 'items' | 'order' | 'reservations' | 'stock' | 'staff' | 'access'
 
-const TABS: [Tab, string][] = [['items', '対象商品と割引'], ['reservations', '予約一覧'], ['stock', '集計・先行分の在庫'], ['staff', 'スタッフ名簿と目標'], ['access', '店舗の予約ページ']]
+const TABS: [Tab, string][] = [['items', '対象商品と割引'], ['order', '店舗ごとの商品の並び'], ['reservations', '予約一覧'], ['stock', '集計・先行分の在庫'], ['staff', 'スタッフ名簿と目標'], ['access', '店舗の予約ページ']]
 
 // 美容機器はまとめ買いの個数に数えない（初期値。木村さんが商品ごとに変えられる）
 function looksLikeDevice(name: string) {
@@ -157,7 +158,8 @@ export default function PresaleAdminPage() {
 
         {tab === 'staff' && <StaffRoster stores={stores} campaign={campaign} />}
         {tab === 'access' && <StoreAccess stores={stores} />}
-        {(tab === 'items' || tab === 'reservations' || tab === 'stock') && !campaign && <p className="rounded-2xl bg-white py-12 text-center text-sm text-gray-400">まず「＋ 新しい企画」で企画を作ってください</p>}
+        {(tab === 'items' || tab === 'order' || tab === 'reservations' || tab === 'stock') && !campaign && <p className="rounded-2xl bg-white py-12 text-center text-sm text-gray-400">まず「＋ 新しい企画」で企画を作ってください</p>}
+        {tab === 'order' && campaign && <ItemOrderSettings key={campaign.id} campaign={campaign} stores={stores} />}
         {tab === 'items' && campaign && <ItemSettings key={campaign.id} campaign={campaign} categories={categories} stores={stores} />}
         {tab === 'reservations' && campaign && <ReservationPanel key={campaign.id} campaign={campaign} storeId={null} stores={stores} access={null} />}
         {tab === 'stock' && campaign && <StockSummary key={campaign.id} campaign={campaign} stores={stores} />}

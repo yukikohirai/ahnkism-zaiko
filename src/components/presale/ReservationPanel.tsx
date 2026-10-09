@@ -36,7 +36,10 @@ type PortalData = {
   staff: Staff[]
   goals: StaffGoal[]
   orders: PresaleOrder[]
+  item_sort?: ItemSort[]
 }
+
+type ItemSort = { store_id: number; product_id: number; sort_order: number }
 
 // 先行予約の入力・一覧・スタッフの目標と実績。
 // 本部画面（access = null、全店）と店舗の予約ページ（合言葉＋暗証番号、自店だけ）で共用する
@@ -51,6 +54,8 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
   const [staff, setStaff] = useState<Staff[]>([])
   const [goals, setGoals] = useState<StaffGoal[]>([])
   const [orders, setOrders] = useState<PresaleOrder[]>([])
+  // 店舗ごとの商品の並び（本部が設定）。設定していない商品は後ろに名前順
+  const [itemSort, setItemSort] = useState<ItemSort[]>([])
   const [draft, setDraft] = useState<Draft>(emptyDraft(storeId))
   const [filterStore, setFilterStore] = useState<number | 'all'>('all')
   const [search, setSearch] = useState('')
@@ -70,9 +75,10 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
       setStaff(portal.staff)
       setGoals(portal.goals.filter((goal) => goal.campaign_id === campaign.id))
       setOrders(portal.orders.filter((order) => order.campaign_id === campaign.id))
+      setItemSort(portal.item_sort ?? [])
       return
     }
-    const [itemResult, tierResult, staffResult, goalResult, orderResult, lineResult] = await Promise.all([
+    const [itemResult, tierResult, staffResult, goalResult, orderResult, lineResult, sortResult] = await Promise.all([
       supabase.from('presale_items').select('*, product:products!inner(brand, name, sale_price)').eq('campaign_id', campaign.id),
       supabase.from('presale_bulk_tiers').select('*').eq('campaign_id', campaign.id),
       supabase.from('staff').select('*').order('sort_order').order('id'),
@@ -80,6 +86,7 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
       fetchAll((start, end) => supabase.from('presale_orders').select('*').eq('campaign_id', campaign.id).order('id').range(start, end)),
       fetchAll((start, end) => supabase.from('presale_order_lines').select('*, presale_orders!inner(campaign_id)')
         .eq('presale_orders.campaign_id', campaign.id).order('id').range(start, end)),
+      supabase.from('presale_store_item_sort').select('store_id, product_id, sort_order'),
     ])
     if (itemResult.error || tierResult.error || staffResult.error || goalResult.error || orderResult.error || lineResult.error) {
       setError('データを読み込めませんでした。')
@@ -89,6 +96,7 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
       return { ...row, brand: product.brand, name: product.name, sale_price: product.sale_price } as PresaleItemWithProduct
     }))
     setTiers((tierResult.data ?? []) as BulkTier[])
+    setItemSort((sortResult.data ?? []) as ItemSort[])
     setStaff((staffResult.data ?? []) as Staff[])
     setGoals((goalResult.data ?? []) as StaffGoal[])
     const linesByOrder = new Map<string, PresaleOrder['lines']>()
@@ -99,7 +107,12 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
   useEffect(() => { void load() }, [load])
 
   const itemMap = useMemo(() => new Map(items.map((item) => [item.product_id, item])), [items])
-  const sortedItems = useMemo(() => [...items].sort((a, b) => `${a.brand ?? ''}${a.name}`.localeCompare(`${b.brand ?? ''}${b.name}`, 'ja')), [items])
+  const sortedItems = useMemo(() => {
+    const order = new Map(itemSort.filter((row) => row.store_id === draft.store_id).map((row) => [row.product_id, row.sort_order]))
+    const LAST = Number.MAX_SAFE_INTEGER
+    return [...items].sort((a, b) => (order.get(a.product_id) ?? LAST) - (order.get(b.product_id) ?? LAST)
+      || `${a.brand ?? ''}${a.name}`.localeCompare(`${b.brand ?? ''}${b.name}`, 'ja'))
+  }, [draft.store_id, itemSort, items])
   const staffMap = useMemo(() => new Map(staff.map((person) => [person.id, person])), [staff])
   const storeName = useMemo(() => new Map(stores.map((store) => [store.id, store.name])), [stores])
   const formStaff = staff.filter((person) => person.is_active && person.store_id === draft.store_id)
