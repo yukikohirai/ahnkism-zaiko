@@ -468,24 +468,24 @@ function StockSummary({ campaign, stores }: { campaign: PresaleCampaign; stores:
   return (
     <section className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
       <p className="mb-1 text-xs text-gray-500">入荷したあとで、各店舗の<b>「先行分」</b>に先行予約用として確保した数を入れてください。お渡し済みにすると先行分の残りと在庫が自動で減ります。</p>
-      <p className="mb-3 text-[11px] text-gray-400">先行分の残り ＝ 先行分 − お渡し済み／通常在庫 ＝ 今の在庫 − 先行分の残り（発注リストもこの通常在庫で計算）。予約合計は発注数の目安です。</p>
+      <p className="mb-3 text-[11px] text-gray-400">残り ＝ 先行分 − お渡し済み（渡済）／通常 ＝ 今の在庫 − 先行分の残り（発注リストもこの通常在庫で計算）。予約合計は発注数の目安です。</p>
       {error && <p className="mb-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}
       <div className="max-h-[70vh] overflow-auto rounded-xl border border-gray-100">
         <table className="w-max min-w-full text-xs">
           <thead className="sticky top-0 z-10 bg-gray-50 text-gray-500">
             <tr>
-              <th rowSpan={2} className="sticky left-0 z-20 w-[220px] min-w-[220px] border-b bg-gray-50 px-3 py-2 text-left">商品</th>
-              <th rowSpan={2} className="border-b bg-pink-50 px-2 py-2 text-center text-pink-700">予約合計</th>
-              {stores.map((store) => <th key={store.id} colSpan={5} className="border-b border-l border-gray-200 px-2 py-1.5 text-center text-sm font-bold text-gray-700">{store.name}</th>)}
+              <th rowSpan={2} className="sticky left-0 z-20 w-[150px] min-w-[150px] border-b bg-gray-50 px-2 py-2 text-left">商品</th>
+              <th rowSpan={2} className="border-b bg-pink-50 px-1 py-2 text-center leading-tight text-pink-700">予約<br />合計</th>
+              {stores.map((store) => <th key={store.id} colSpan={5} className="border-b border-l-2 border-gray-300 px-1 py-1.5 text-center text-sm font-bold text-gray-700">{store.name}</th>)}
             </tr>
             <tr>
               {stores.map((store) => (
                 <Fragment key={store.id}>
-                  <th className="border-b border-l border-gray-200 px-2 py-1 text-center">予約</th>
-                  <th className="border-b px-2 py-1 text-center">渡済</th>
-                  <th className="border-b bg-pink-50 px-2 py-1 text-center text-pink-700">先行分</th>
-                  <th className="border-b px-2 py-1 text-center">先行分の残り</th>
-                  <th className="border-b bg-blue-50 px-2 py-1 text-center text-blue-700">通常在庫</th>
+                  <th className="border-b border-l-2 border-gray-300 px-1 py-1 text-center">予約</th>
+                  <th className="border-b px-1 py-1 text-center">渡済</th>
+                  <th className="border-b bg-pink-50 px-1 py-1 text-center text-pink-700">先行分</th>
+                  <th className="border-b px-1 py-1 text-center">残り</th>
+                  <th className="border-b bg-blue-50 px-1 py-1 text-center text-blue-700">通常</th>
                 </Fragment>
               ))}
             </tr>
@@ -495,11 +495,11 @@ function StockSummary({ campaign, stores }: { campaign: PresaleCampaign; stores:
               const totalReserved = stores.reduce((sum, store) => sum + (reservedMap.get(`${store.id}_${item.product_id}`)?.reserved ?? 0), 0)
               return (
                 <tr key={item.product_id} className="border-t border-gray-100">
-                  <td className="sticky left-0 z-10 w-[220px] min-w-[220px] bg-white px-3 py-1.5">
+                  <td className="sticky left-0 z-10 w-[150px] min-w-[150px] bg-white px-2 py-1.5">
                     <div className="text-[10px] text-gray-400">{item.brand}</div>
                     <div className="break-words font-medium text-gray-700">{item.name}</div>
                   </td>
-                  <td className="bg-pink-50/50 px-2 py-1.5 text-center text-sm font-bold text-pink-700">{totalReserved || '−'}</td>
+                  <td className="bg-pink-50/50 px-1 py-1.5 text-center text-sm font-bold text-pink-700">{totalReserved || '−'}</td>
                   {stores.map((store) => {
                     const key = `${store.id}_${item.product_id}`
                     const reserved = reservedMap.get(key) ?? { reserved: 0, delivered: 0 }
@@ -509,16 +509,16 @@ function StockSummary({ campaign, stores }: { campaign: PresaleCampaign; stores:
                     const normal = current === undefined ? null : current - Math.max(0, remaining)
                     return (
                       <Fragment key={store.id}>
-                        <td className="border-l border-gray-200 px-2 py-1.5 text-center">{reserved.reserved || '−'}</td>
-                        <td className="px-2 py-1.5 text-center text-green-700">{reserved.delivered || '−'}</td>
-                        <td className="bg-pink-50/50 px-1 py-1">
+                        <td className="border-l-2 border-gray-300 px-1 py-1.5 text-center">{reserved.reserved || '−'}</td>
+                        <td className="px-1 py-1.5 text-center text-green-700">{reserved.delivered || '−'}</td>
+                        <td className="bg-pink-50/50 px-0.5 py-1">
                           <input inputMode="numeric" value={drafts[key] ?? (allocated ? String(allocated) : '')} placeholder="0"
                             onChange={(event) => setDrafts((previous) => ({ ...previous, [key]: event.target.value }))}
                             onBlur={() => void saveAllocation(store.id, item.product_id)} onKeyDown={(event) => { if (event.key === 'Enter') (event.target as HTMLInputElement).blur() }}
-                            className="w-14 rounded-lg border border-pink-200 bg-white px-1 py-1 text-center text-base" />
+                            className="w-11 rounded-md border border-pink-200 bg-white px-0.5 py-1 text-center text-base" />
                         </td>
-                        <td className={`px-2 py-1.5 text-center font-bold ${remaining < 0 ? 'text-red-600' : 'text-gray-700'}`}>{allocated || reserved.delivered ? remaining : '−'}</td>
-                        <td className={`bg-blue-50/50 px-2 py-1.5 text-center font-bold ${normal !== null && normal < 0 ? 'text-red-600' : 'text-blue-700'}`}>{normal === null ? '取扱なし' : normal}</td>
+                        <td className={`px-1 py-1.5 text-center font-bold ${remaining < 0 ? 'text-red-600' : 'text-gray-700'}`}>{allocated || reserved.delivered ? remaining : '−'}</td>
+                        <td className={`bg-blue-50/50 px-1 py-1.5 text-center font-bold ${normal === null ? 'text-[10px] font-normal text-gray-400' : normal < 0 ? 'text-red-600' : 'text-blue-700'}`}>{normal === null ? 'なし' : normal}</td>
                       </Fragment>
                     )
                   })}
