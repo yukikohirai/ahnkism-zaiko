@@ -82,6 +82,25 @@ export default function OperationsPage() {
       if (data) setMinDate(data as string)
     })
   }, [])
+  // 本部の編集モード：ONの間（30分）だけ、締めた月の記録も入力・修正・取り消しできる
+  const [hqEditUntil, setHqEditUntil] = useState<string | null>(null)
+  const [nowTick, setNowTick] = useState(() => Date.now())
+  useEffect(() => {
+    void supabase.from('hq_edit_sessions').select('until').maybeSingle().then(({ data }) => {
+      if (data?.until) setHqEditUntil(data.until as string)
+    })
+    const timer = window.setInterval(() => setNowTick(Date.now()), 30000)
+    return () => window.clearInterval(timer)
+  }, [])
+  const hqEdit = hqEditUntil !== null && new Date(hqEditUntil).getTime() > nowTick
+  const effectiveMinDate = hqEdit ? undefined : minDate
+  async function toggleHqEdit() {
+    if (!hqEdit && !confirm('締めた月の編集モードをONにします。\n30分間、締めた月の入出庫も入力・修正・取り消しできます（本部だけ）。\n直した分は月末在庫・繰越にも反映されます。よろしいですか？')) return
+    const { data, error: modeError } = await supabase.rpc('set_hq_edit_mode', { p_on: !hqEdit })
+    if (modeError) { setError(`切り替えられませんでした：${modeError.message}`); return }
+    setHqEditUntil(hqEdit ? null : (data as string))
+    setNowTick(Date.now())
+  }
   const [storeId, setStoreId] = useState<number | null>(null)
   const [fromStoreId, setFromStoreId] = useState<number | null>(null)
   const [toStoreId, setToStoreId] = useState<number | null>(null)
@@ -376,6 +395,19 @@ export default function OperationsPage() {
       </header>
 
       <div className="mx-auto max-w-3xl p-4">
+        {minDate && (
+          <div className={`mb-4 flex flex-wrap items-center justify-between gap-2 rounded-2xl border px-4 py-3 text-sm ${hqEdit ? 'border-amber-300 bg-amber-50' : 'border-gray-200 bg-white'}`}>
+            <span className={hqEdit ? 'font-bold text-amber-800' : 'text-gray-600'}>
+              {hqEdit
+                ? `締めた月の編集モード中（${new Date(hqEditUntil!).toLocaleTimeString('ja-JP', { timeZone: 'Asia/Tokyo', hour: '2-digit', minute: '2-digit' })}まで）：締めた月の日付でも入力・修正できます`
+                : '締めた月の記録は、本部の編集モードで直せます'}
+            </span>
+            <button onClick={() => void toggleHqEdit()}
+              className={`rounded-lg px-3 py-1.5 text-xs font-bold ${hqEdit ? 'bg-amber-600 text-white' : 'border border-amber-300 bg-white text-amber-700'}`}>
+              {hqEdit ? '編集モードを終わる' : '編集モードにする'}
+            </button>
+          </div>
+        )}
         <div className="mb-4 grid grid-cols-4 gap-2 rounded-2xl bg-white p-2 shadow-sm">
           {([
             ['receipt', '入荷・発注'],
@@ -389,7 +421,7 @@ export default function OperationsPage() {
 
         <section className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
           <label className="block text-xs font-medium text-gray-500">日付
-            <input type="date" value={date} min={minDate} onChange={(event) => setDate(event.target.value)} className="mt-1 block w-full rounded-xl border border-gray-200 px-3 py-2 text-base" />
+            <input type="date" value={date} min={effectiveMinDate} onChange={(event) => setDate(event.target.value)} className="mt-1 block w-full rounded-xl border border-gray-200 px-3 py-2 text-base" />
           </label>
 
           {mode === 'transfer' ? (
@@ -511,10 +543,10 @@ export default function OperationsPage() {
                   </div>
                   <div className="flex shrink-0 items-center gap-2">
                     <div className={`font-bold ${item.quantity > 0 ? 'text-green-600' : 'text-red-600'}`}>{item.quantity > 0 ? '+' : ''}{item.quantity}</div>
-                    {editMode && editingId !== item.id && minDate && item.occurred_on < minDate && (
+                    {editMode && editingId !== item.id && effectiveMinDate && item.occurred_on < effectiveMinDate && (
                       <span className="text-[10px] text-gray-400">締め済み</span>
                     )}
-                    {editMode && editingId !== item.id && !(minDate && item.occurred_on < minDate) && (
+                    {editMode && editingId !== item.id && !(effectiveMinDate && item.occurred_on < effectiveMinDate) && (
                       <button onClick={() => void startEdit(item)} className="rounded-lg bg-blue-50 px-2.5 py-1.5 text-xs font-medium text-blue-700">修正</button>
                     )}
                   </div>
@@ -522,7 +554,7 @@ export default function OperationsPage() {
                 {editMode && editingId === item.id && (
                   <div className="mt-2 space-y-2 rounded-xl border border-amber-200 bg-amber-50/50 p-3">
                     <label className="block text-xs text-gray-500">日付
-                      <input type="date" value={editDate} min={minDate} onChange={(event) => setEditDate(event.target.value)} className="mt-1 block w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-base" />
+                      <input type="date" value={editDate} min={effectiveMinDate} onChange={(event) => setEditDate(event.target.value)} className="mt-1 block w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-base" />
                     </label>
                     {isTransfer(item.movement_type) ? (
                       <div className="grid grid-cols-2 gap-2">
