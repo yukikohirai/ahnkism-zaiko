@@ -249,6 +249,8 @@ export default function StaffPurchasesPage() {
     setSearch('')
     setUnitPrice(product.cost_price === null ? '' : String(withTax(product.cost_price)))
     setDealer(product.dealer ?? '')
+    // 「その他」は在庫を持たないので、在庫から引かない
+    if (product.name.trim() === 'その他') setDeduct(false)
   }
 
   async function addPurchase() {
@@ -624,7 +626,7 @@ export default function StaffPurchasesPage() {
                   <p className="text-xs text-gray-500">在庫</p>
                   <div className="mt-1 flex rounded-lg bg-gray-100 p-0.5 text-sm font-medium">
                     {([[true, '店舗在庫から引く'], [false, '在庫から引かない']] as [boolean, string][]).map(([value, text]) => (
-                      <button key={text} onClick={() => { setDeduct(value); setProductId(null); setFreeItem(false) }}
+                      <button key={text} disabled={value && isOther(productId)} onClick={() => { setDeduct(value); setProductId(null); setFreeItem(false) }}
                         className={`flex-1 rounded-md px-3 py-2 ${deduct === value ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500'}`}>
                         {text}
                       </button>
@@ -675,7 +677,7 @@ export default function StaffPurchasesPage() {
                     <button onClick={() => setProductId(null)} className="text-xs text-blue-600 underline">選び直す</button>
                   </div>
                   {isOther(selectedProduct.id) && (
-                    <label className="mt-2 block text-xs text-gray-500">中身（その他（　）に入ります）
+                    <label className="mt-2 block text-xs text-gray-500">中身（その他（　）に入ります・「その他」は在庫から引きません）
                       <input value={itemDetail} onChange={(event) => setItemDetail(event.target.value)} placeholder="例：ヘアオイル試供品"
                         className="mt-1 block w-full rounded-lg border border-blue-300 px-3 py-2 text-base outline-none focus:border-blue-500" />
                     </label>
