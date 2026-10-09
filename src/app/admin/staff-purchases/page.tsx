@@ -23,6 +23,7 @@ type Purchase = {
   source_ref: string | null
   product_id: number | null
   item_name: string | null
+  item_detail: string | null
   dealer: string | null
   quantity: number
   unit_price: number
@@ -96,6 +97,8 @@ export default function StaffPurchasesPage() {
   const [freeItem, setFreeItem] = useState(false)
   const [itemName, setItemName] = useState('')
   const [dealer, setDealer] = useState('')
+  // 商品「その他」を選んだときの中身（例：ヘアオイル試供品）
+  const [itemDetail, setItemDetail] = useState('')
   const [quantity, setQuantity] = useState('1')
   const [unitPrice, setUnitPrice] = useState('')
   const [collected, setCollected] = useState(false)
@@ -120,6 +123,7 @@ export default function StaffPurchasesPage() {
   const [editPrice, setEditPrice] = useState('')
   const [editNote, setEditNote] = useState('')
   const [editDealer, setEditDealer] = useState('')
+  const [editDetail, setEditDetail] = useState('')
   const [editDate, setEditDate] = useState('')
   const [editStaffId, setEditStaffId] = useState<number | null>(null)
   const [editItem, setEditItem] = useState('')
@@ -159,7 +163,7 @@ export default function StaffPurchasesPage() {
       fetchAll((from, to) => supabase.from('products').select('id, brand, name, cost_price, dealer').eq('is_active', true).order('id').range(from, to)),
       fetchAll((from, to) => supabase.from('store_products').select('store_id, product_id').order('store_id').order('product_id').range(from, to)),
       fetchAll((from, to) => supabase.from('staff_purchases')
-        .select('id, purchased_on, staff_id, store_id, legacy_name, source_ref, product_id, item_name, dealer, quantity, unit_price, kind, collected_on, handed_on, payout_id, note')
+        .select('id, purchased_on, staff_id, store_id, legacy_name, source_ref, product_id, item_name, item_detail, dealer, quantity, unit_price, kind, collected_on, handed_on, payout_id, note')
         .order('purchased_on', { ascending: false }).order('created_at', { ascending: false }).order('id').range(from, to)),
       supabase.from('cash_payouts').select('id, box, dealer, paid_at, amount, note').order('paid_at', { ascending: false }),
       supabase.from('app_settings').select('value').eq('key', 'safe_threshold').maybeSingle(),
@@ -195,8 +199,11 @@ export default function StaffPurchasesPage() {
     const product = productMap.get(id)
     return product ? `${product.brand ? `${product.brand} ` : ''}${product.name}` : `商品#${id}`
   }
-  const rowLabel = (row: { product_id: number | null; item_name: string | null; kind: Kind }) => (
-    row.product_id !== null ? productLabel(row.product_id) : row.kind === 'legacy' ? (row.item_name ?? '（商品名なし）') : `${row.item_name ?? ''}（一覧外）`
+  const isOther = (productId: number | null) => productId !== null && productMap.get(productId)?.name.trim() === 'その他'
+  const rowLabel = (row: { product_id: number | null; item_name: string | null; item_detail?: string | null; kind: Kind }) => (
+    row.product_id !== null
+      ? `${productLabel(row.product_id)}${row.item_detail ? `（${row.item_detail}）` : ''}`
+      : row.kind === 'legacy' ? (row.item_name ?? '（商品名なし）') : `${row.item_name ?? ''}（一覧外）`
   )
   const staffName = (id: number | null, legacyName?: string | null) => {
     if (id !== null) return staffMap.get(id)?.name ?? `（名簿にいない #${id}）`
@@ -257,12 +264,14 @@ export default function StaffPurchasesPage() {
       p_quantity: qty, p_unit_price: price, p_kind: kind, p_collected: collected, p_note: note || null,
       p_item_name: useFreeItem ? itemName.trim() : null,
       p_dealer: kind === 'personal_order' ? dealer.trim() : null,
+      p_item_detail: !useFreeItem && isOther(productId) ? itemDetail.trim() : null,
     })
     setSaving(false)
     if (saveError) { setError(`登録できませんでした：${saveError.message}`); return }
     setMessage(`${staffName(staffId)}：${useFreeItem ? itemName.trim() : productLabel(productId!)} ×${qty}（${yen(qty * price)}）を登録しました。`)
     setProductId(null)
     setItemName('')
+    setItemDetail('')
     setQuantity('1')
     setUnitPrice('')
     setNote('')
@@ -284,6 +293,7 @@ export default function StaffPurchasesPage() {
     setEditPrice(String(row.unit_price))
     setEditNote(row.note ?? '')
     setEditDealer(row.dealer ?? '')
+    setEditDetail(row.item_detail ?? '')
     setEditDate(row.purchased_on)
     setEditStaffId(row.staff_id)
     setEditItem(row.item_name ?? '')
@@ -306,6 +316,7 @@ export default function StaffPurchasesPage() {
     if (!Number.isInteger(qty) || qty <= 0 || price === null) { setError('数と単価を正しく入力してください。'); return }
     const { error: updateError } = await supabase.rpc('update_staff_purchase', {
       p_id: row.id, p_quantity: qty, p_unit_price: price, p_note: editNote || null, p_dealer: row.kind === 'personal_order' ? editDealer.trim() : null,
+      p_item_detail: editDetail.trim() || null,
     })
     if (updateError) { setError(`修正できませんでした：${updateError.message}`); return }
     setEditingId(null)
@@ -468,10 +479,10 @@ export default function StaffPurchasesPage() {
   const summary = useMemo(() => {
     if (sumStaff === null) return null
     const rows = purchases.filter((row) => row.staff_id === sumStaff && row.purchased_on >= sumFrom && row.purchased_on <= sumTo)
-    const grouped = new Map<string, { product_id: number | null; item_name: string | null; kind: Kind; unit_price: number; quantity: number; amount: number; unpaid: number }>()
+    const grouped = new Map<string, { product_id: number | null; item_name: string | null; item_detail: string | null; kind: Kind; unit_price: number; quantity: number; amount: number; unpaid: number }>()
     rows.forEach((row) => {
-      const key = `${row.product_id ?? `name:${row.item_name}`}_${row.kind}_${row.unit_price}`
-      const item = grouped.get(key) ?? { product_id: row.product_id, item_name: row.item_name, kind: row.kind, unit_price: row.unit_price, quantity: 0, amount: 0, unpaid: 0 }
+      const key = `${row.product_id ?? `name:${row.item_name}`}_${row.item_detail ?? ''}_${row.kind}_${row.unit_price}`
+      const item = grouped.get(key) ?? { product_id: row.product_id, item_name: row.item_name, item_detail: row.item_detail, kind: row.kind, unit_price: row.unit_price, quantity: 0, amount: 0, unpaid: 0 }
       item.quantity += row.quantity
       item.amount += row.quantity * row.unit_price
       if (row.kind !== 'legacy' && !row.collected_on) item.unpaid += row.quantity * row.unit_price
@@ -598,10 +609,18 @@ export default function StaffPurchasesPage() {
                     <button onClick={() => { setFreeItem(false); setItemName('') }} className="mt-1 text-xs text-blue-600 underline">一覧から選ぶ</button>
                   </div>
                 ) : selectedProduct ? (
+                  <>
                   <div className="mt-1 flex items-center justify-between rounded-lg bg-blue-50 px-3 py-2 text-sm">
                     <span className="font-medium text-blue-800">{productLabel(selectedProduct.id)}</span>
                     <button onClick={() => setProductId(null)} className="text-xs text-blue-600 underline">選び直す</button>
                   </div>
+                  {isOther(selectedProduct.id) && (
+                    <label className="mt-2 block text-xs text-gray-500">中身（その他（　）に入ります）
+                      <input value={itemDetail} onChange={(event) => setItemDetail(event.target.value)} placeholder="例：ヘアオイル試供品"
+                        className="mt-1 block w-full rounded-lg border border-blue-300 px-3 py-2 text-base outline-none focus:border-blue-500" />
+                    </label>
+                  )}
+                  </>
                 ) : (
                   <>
                     <input value={search} onChange={(event) => setSearch(event.target.value)} placeholder="商品名・ブランドで検索"
@@ -793,6 +812,9 @@ export default function StaffPurchasesPage() {
                           </td>
                           <td className="border border-gray-200 px-2 py-1.5">
                             {rowLabel(row)}
+                            {editing && isOther(row.product_id) && (
+                              <input value={editDetail} onChange={(event) => setEditDetail(event.target.value)} placeholder="中身（例：ヘアオイル試供品）" className="mt-1 block w-full rounded border border-blue-300 px-1 py-0.5 text-base" />
+                            )}
                             {editing
                               ? <input value={editNote} onChange={(event) => setEditNote(event.target.value)} placeholder="メモ" className="mt-1 block w-full rounded border border-gray-200 px-1 py-0.5 text-base" />
                               : row.note && <span className="block text-[11px] text-gray-400">{row.note}</span>}
@@ -881,7 +903,7 @@ export default function StaffPurchasesPage() {
                   </thead>
                   <tbody>
                     {summary.items.map((item) => (
-                      <tr key={`${item.product_id ?? `name:${item.item_name}`}_${item.kind}_${item.unit_price}`}>
+                      <tr key={`${item.product_id ?? `name:${item.item_name}`}_${item.item_detail ?? ''}_${item.kind}_${item.unit_price}`}>
                         <td className="border border-gray-200 px-2 py-1.5">{rowLabel(item)}</td>
                         <td className="border border-gray-200 px-2 py-1.5 text-xs">{KIND_LABEL[item.kind]}</td>
                         <td className="border border-gray-200 px-2 py-1.5 text-right">{yen(item.unit_price)}</td>
