@@ -28,6 +28,7 @@ type Purchase = {
   quantity: number
   unit_price: number
   kind: Kind
+  deduct_stock: boolean
   collected_on: string | null
   handed_on: string | null
   payout_id: string | null
@@ -40,7 +41,8 @@ type Tab = 'entry' | 'summary' | 'cash'
 // スタッフ購入は2026年10月から
 const START_DATE = '2026-10-01'
 const PAGE_SIZE = 20
-const KIND_LABEL: Record<Kind, string> = { store_stock: '店舗在庫から', personal_order: '個人発注', legacy: '過去分' }
+// kind は集金先：store_stock = 金庫（オーナー渡し）、personal_order = ディーラー支払い
+const KIND_LABEL: Record<Kind, string> = { store_stock: '金庫（オーナー渡し）', personal_order: 'ディーラー支払い', legacy: '過去分' }
 const BOX_LABEL = { safe: '金庫（オーナー渡し用）', dealer: 'ディーラー支払い用' }
 
 function normalize(value: string) {
@@ -91,6 +93,8 @@ export default function StaffPurchasesPage() {
   const [storeId, setStoreId] = useState<number | null>(null)
   const [staffId, setStaffId] = useState<number | null>(null)
   const [kind, setKind] = useState<Kind>('store_stock')
+  // 店舗在庫から引くか（集金先とは別に選ぶ）
+  const [deduct, setDeduct] = useState(true)
   const [search, setSearch] = useState('')
   const [productId, setProductId] = useState<number | null>(null)
   // 個人発注で商品一覧にない商品は、商品名を手で書く
@@ -112,6 +116,7 @@ export default function StaffPurchasesPage() {
   const [listStaff, setListStaff] = useState<number | 'all'>('all')
   const [listKind, setListKind] = useState<Kind | 'all'>('all')
   const [listDealer, setListDealer] = useState('all')
+  const [listDeduct, setListDeduct] = useState<'all' | 'yes' | 'no'>('all')
   const [onlyUnpaid, setOnlyUnpaid] = useState(false)
   // ディーラーに渡す：集金済みでまだ渡していない個人発注を選んで渡す
   const [onlyNotHanded, setOnlyNotHanded] = useState(false)
@@ -163,7 +168,7 @@ export default function StaffPurchasesPage() {
       fetchAll((from, to) => supabase.from('products').select('id, brand, name, cost_price, dealer').eq('is_active', true).order('id').range(from, to)),
       fetchAll((from, to) => supabase.from('store_products').select('store_id, product_id').order('store_id').order('product_id').range(from, to)),
       fetchAll((from, to) => supabase.from('staff_purchases')
-        .select('id, purchased_on, staff_id, store_id, legacy_name, source_ref, product_id, item_name, item_detail, dealer, quantity, unit_price, kind, collected_on, handed_on, payout_id, note')
+        .select('id, purchased_on, staff_id, store_id, legacy_name, source_ref, product_id, item_name, item_detail, dealer, quantity, unit_price, kind, deduct_stock, collected_on, handed_on, payout_id, note')
         .order('purchased_on', { ascending: false }).order('created_at', { ascending: false }).order('id').range(from, to)),
       supabase.from('cash_payouts').select('id, box, dealer, paid_at, amount, note').order('paid_at', { ascending: false }),
       supabase.from('app_settings').select('value').eq('key', 'safe_threshold').maybeSingle(),
@@ -234,10 +239,10 @@ export default function StaffPurchasesPage() {
     const keyword = normalize(search)
     if (!keyword) return []
     return products
-      .filter((product) => kind === 'personal_order' || (storeId !== null && assignments.has(`${storeId}_${product.id}`)))
+      .filter((product) => !deduct || (storeId !== null && assignments.has(`${storeId}_${product.id}`)))
       .filter((product) => normalize(`${product.brand ?? ''}${product.name}`).includes(keyword))
       .slice(0, 30)
-  }, [assignments, kind, products, search, storeId])
+  }, [assignments, deduct, products, search, storeId])
 
   function chooseProduct(product: Product) {
     setProductId(product.id)
@@ -251,9 +256,9 @@ export default function StaffPurchasesPage() {
     setMessage('')
     const qty = Number(quantity)
     const price = parseYen(unitPrice)
-    const useFreeItem = kind === 'personal_order' && freeItem
+    const useFreeItem = !deduct && freeItem
     if (!storeId || !staffId) { setError('店舗とスタッフを選んでください。'); return }
-    if (kind === 'personal_order' && !dealer.trim()) { setError('個人発注はディーラーを選んでください。'); return }
+    if (kind === 'personal_order' && !dealer.trim()) { setError('ディーラー支払いのときは、ディーラーを選んでください。'); return }
     if (useFreeItem ? !itemName.trim() : !productId) { setError(useFreeItem ? '商品名を入力してください。' : '商品を選んでください。'); return }
     if (!Number.isInteger(qty) || qty <= 0) { setError('数は1以上の整数で入力してください。'); return }
     if (price === null) { setError('単価（税込）を入力してください。'); return }
@@ -264,6 +269,7 @@ export default function StaffPurchasesPage() {
       p_quantity: qty, p_unit_price: price, p_kind: kind, p_collected: collected, p_note: note || null,
       p_item_name: useFreeItem ? itemName.trim() : null,
       p_dealer: kind === 'personal_order' ? dealer.trim() : null,
+      p_deduct_stock: deduct,
       p_item_detail: !useFreeItem && isOther(productId) ? itemDetail.trim() : null,
     })
     setSaving(false)
@@ -324,7 +330,7 @@ export default function StaffPurchasesPage() {
   }
 
   async function cancelPurchase(row: Purchase) {
-    const stockNote = row.kind === 'store_stock' ? '\n店舗の在庫も元に戻ります。' : ''
+    const stockNote = row.deduct_stock ? '\n店舗の在庫も元に戻ります。' : ''
     if (!confirm(`この記録を取り消します。\n${row.purchased_on} ${staffName(row.staff_id, row.legacy_name)}：${rowLabel(row)} ×${row.quantity}${stockNote}\nよろしいですか？`)) return
     const { error: cancelError } = await supabase.rpc('cancel_staff_purchase', { p_id: row.id })
     if (cancelError) { setError(`取り消せませんでした：${cancelError.message}`); return }
@@ -439,10 +445,11 @@ export default function StaffPurchasesPage() {
     row.purchased_on >= listFrom && row.purchased_on <= listTo
     && (listStaff === 'all' || row.staff_id === listStaff)
     && (listKind === 'all' || row.kind === listKind)
+    && (listDeduct === 'all' || (row.kind !== 'legacy' && row.deduct_stock === (listDeduct === 'yes')))
     && (listDealer === 'all' || row.dealer === listDealer)
     && (!onlyUnpaid || (row.kind !== 'legacy' && !row.collected_on))
     && (!onlyNotHanded || (row.kind === 'personal_order' && row.collected_on && !row.handed_on))
-  )), [onlyNotHanded, listDealer, listFrom, listKind, listStaff, listTo, onlyUnpaid, purchases])
+  )), [listDeduct, onlyNotHanded, listDealer, listFrom, listKind, listStaff, listTo, onlyUnpaid, purchases])
 
   // ディーラーの候補：商品一覧に登録されているディーラーと、これまで個人発注で使ったディーラー
   const dealerNames = useMemo(() => Array.from(new Set([
@@ -471,27 +478,65 @@ export default function StaffPurchasesPage() {
   const listUnpaid = listRows.filter((row) => row.kind !== 'legacy' && !row.collected_on).reduce((sum, row) => sum + row.quantity * row.unit_price, 0)
   // 一覧は20件ずつ。絞り込みを変えたら1ページ目に戻す
   const [listPage, setListPage] = useState(1)
-  useEffect(() => { setListPage(1) }, [listDealer, listFrom, listKind, listStaff, listTo, onlyNotHanded, onlyUnpaid])
+  useEffect(() => { setListPage(1) }, [listDeduct, listDealer, listFrom, listKind, listStaff, listTo, onlyNotHanded, onlyUnpaid])
   const pageCount = Math.max(1, Math.ceil(listRows.length / PAGE_SIZE))
   const currentPage = Math.min(listPage, pageCount)
   const pageRows = listRows.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
 
+  const amountOf = (row: Purchase) => row.quantity * row.unit_price
+  const isUnpaid = (row: Purchase) => row.kind !== 'legacy' && !row.collected_on
+
+  // 全員の一覧（スタッフを選ぶ前に表示）：期間内の合計を、金庫分・ディーラー分・過去分・未集金に分けて出す
+  const staffTotals = useMemo(() => {
+    const rows = purchases.filter((row) => row.purchased_on >= sumFrom && row.purchased_on <= sumTo)
+    const map = new Map<string, { staffId: number | null; name: string; count: number; total: number; safe: number; dealer: number; legacy: number; unpaid: number }>()
+    rows.forEach((row) => {
+      const key = row.staff_id !== null ? `s${row.staff_id}` : `n${row.legacy_name ?? ''}`
+      const item = map.get(key) ?? { staffId: row.staff_id, name: staffName(row.staff_id, row.legacy_name), count: 0, total: 0, safe: 0, dealer: 0, legacy: 0, unpaid: 0 }
+      const amount = amountOf(row)
+      item.count += 1
+      item.total += amount
+      if (row.kind === 'store_stock') item.safe += amount
+      else if (row.kind === 'personal_order') item.dealer += amount
+      else item.legacy += amount
+      if (isUnpaid(row)) item.unpaid += amount
+      map.set(key, item)
+    })
+    const list = Array.from(map.values()).sort((a, b) => b.unpaid - a.unpaid || b.total - a.total)
+    const sum = list.reduce((acc, item) => ({
+      count: acc.count + item.count, total: acc.total + item.total, safe: acc.safe + item.safe,
+      dealer: acc.dealer + item.dealer, legacy: acc.legacy + item.legacy, unpaid: acc.unpaid + item.unpaid,
+    }), { count: 0, total: 0, safe: 0, dealer: 0, legacy: 0, unpaid: 0 })
+    return { list, sum }
+  // staffName は名簿から作るので staff を見ている
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [purchases, staff, sumFrom, sumTo])
+
+  // 1人分：集金先ごとに分けて、商品ごとにまとめる
   const summary = useMemo(() => {
     if (sumStaff === null) return null
     const rows = purchases.filter((row) => row.staff_id === sumStaff && row.purchased_on >= sumFrom && row.purchased_on <= sumTo)
-    const grouped = new Map<string, { product_id: number | null; item_name: string | null; item_detail: string | null; kind: Kind; unit_price: number; quantity: number; amount: number; unpaid: number }>()
+    type Item = { product_id: number | null; item_name: string | null; item_detail: string | null; kind: Kind; deduct: boolean; dealer: string | null; unit_price: number; quantity: number; amount: number; unpaid: number }
+    const grouped = new Map<string, Item>()
     rows.forEach((row) => {
-      const key = `${row.product_id ?? `name:${row.item_name}`}_${row.item_detail ?? ''}_${row.kind}_${row.unit_price}`
-      const item = grouped.get(key) ?? { product_id: row.product_id, item_name: row.item_name, item_detail: row.item_detail, kind: row.kind, unit_price: row.unit_price, quantity: 0, amount: 0, unpaid: 0 }
+      const key = [row.product_id ?? `name:${row.item_name}`, row.item_detail ?? '', row.kind, row.deduct_stock, row.dealer ?? '', row.unit_price].join('_')
+      const item = grouped.get(key) ?? { product_id: row.product_id, item_name: row.item_name, item_detail: row.item_detail, kind: row.kind, deduct: row.deduct_stock, dealer: row.dealer, unit_price: row.unit_price, quantity: 0, amount: 0, unpaid: 0 }
       item.quantity += row.quantity
-      item.amount += row.quantity * row.unit_price
-      if (row.kind !== 'legacy' && !row.collected_on) item.unpaid += row.quantity * row.unit_price
+      item.amount += amountOf(row)
+      if (isUnpaid(row)) item.unpaid += amountOf(row)
       grouped.set(key, item)
     })
-    const total = rows.reduce((sum, row) => sum + row.quantity * row.unit_price, 0)
-    const unpaidRows = rows.filter((row) => row.kind !== 'legacy' && !row.collected_on)
-    const unpaid = unpaidRows.reduce((sum, row) => sum + row.quantity * row.unit_price, 0)
-    return { items: Array.from(grouped.values()), total, unpaid, collected: total - unpaid, unpaidIds: unpaidRows.map((row) => row.id) }
+    const items = Array.from(grouped.values())
+    const sections = (['store_stock', 'personal_order', 'legacy'] as Kind[]).map((kindKey) => {
+      const list = items.filter((item) => item.kind === kindKey).sort((a, b) => b.amount - a.amount)
+      return { kind: kindKey, items: list, total: list.reduce((sum, item) => sum + item.amount, 0), unpaid: list.reduce((sum, item) => sum + item.unpaid, 0) }
+    }).filter((section) => section.items.length > 0)
+    const total = rows.reduce((sum, row) => sum + amountOf(row), 0)
+    const unpaidRows = rows.filter(isUnpaid)
+    const unpaid = unpaidRows.reduce((sum, row) => sum + amountOf(row), 0)
+    const totalOf = (kindKey: Kind) => rows.filter((row) => row.kind === kindKey).reduce((sum, row) => sum + amountOf(row), 0)
+    return { sections, total, unpaid, safe: totalOf('store_stock'), dealer: totalOf('personal_order'), legacy: totalOf('legacy'), unpaidIds: unpaidRows.map((row) => row.id) }
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [purchases, sumFrom, sumStaff, sumTo])
 
   const staffOptions = (
@@ -574,20 +619,35 @@ export default function StaffPurchasesPage() {
           <>
             <section className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
               <h2 className="font-bold text-gray-800">購入を登録</h2>
-              <div className="mt-3 flex rounded-lg bg-gray-100 p-0.5 text-sm font-medium">
-                {(['store_stock', 'personal_order'] as Kind[]).map((value) => (
-                  <button key={value} onClick={() => { setKind(value); setProductId(null); setFreeItem(false) }}
-                    className={`flex-1 rounded-md px-3 py-2 ${kind === value ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500'}`}>
-                    {KIND_LABEL[value]}
-                    <span className="block text-[10px] font-normal text-gray-400">{value === 'store_stock' ? '店舗の在庫が減る・集金は金庫へ' : '在庫は動かない・集金はディーラー支払い用へ'}</span>
-                  </button>
-                ))}
+              <div className="mt-3 grid gap-2 sm:grid-cols-2">
+                <div>
+                  <p className="text-xs text-gray-500">在庫</p>
+                  <div className="mt-1 flex rounded-lg bg-gray-100 p-0.5 text-sm font-medium">
+                    {([[true, '店舗在庫から引く'], [false, '在庫から引かない']] as [boolean, string][]).map(([value, text]) => (
+                      <button key={text} onClick={() => { setDeduct(value); setProductId(null); setFreeItem(false) }}
+                        className={`flex-1 rounded-md px-3 py-2 ${deduct === value ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500'}`}>
+                        {text}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-500">集金先</p>
+                  <div className="mt-1 flex rounded-lg bg-gray-100 p-0.5 text-sm font-medium">
+                    {(['store_stock', 'personal_order'] as Kind[]).map((value) => (
+                      <button key={value} onClick={() => setKind(value)}
+                        className={`flex-1 rounded-md px-3 py-2 ${kind === value ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500'}`}>
+                        {KIND_LABEL[value]}
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
               <div className="mt-3 grid gap-2 sm:grid-cols-3">
                 <label className="text-xs text-gray-500">日付
                   <input type="date" value={date} min={minDate} onChange={(event) => setDate(event.target.value)} className="mt-1 block w-full rounded-lg border border-gray-200 px-2 py-2 text-base" />
                 </label>
-                <label className="text-xs text-gray-500">店舗
+                <label className="text-xs text-gray-500">{deduct ? '在庫を引く店舗' : '店舗'}
                   <select value={storeId ?? ''} onChange={(event) => { setStoreId(Number(event.target.value)); setProductId(null) }} className="mt-1 block w-full rounded-lg border border-gray-200 px-2 py-2 text-base">
                     {stores.map((store) => <option key={store.id} value={store.id}>{store.name}</option>)}
                   </select>
@@ -601,8 +661,8 @@ export default function StaffPurchasesPage() {
               </div>
 
               <div className="mt-3">
-                <p className="text-xs text-gray-500">商品{kind === 'store_stock' && '（この店舗の取扱商品から）'}</p>
-                {kind === 'personal_order' && freeItem ? (
+                <p className="text-xs text-gray-500">商品{deduct && '（この店舗の取扱商品から）'}</p>
+                {!deduct && freeItem ? (
                   <div className="mt-1">
                     <input value={itemName} onChange={(event) => setItemName(event.target.value)} placeholder="商品名（ブランドも一緒に）"
                       className="block w-full rounded-lg border border-purple-300 bg-purple-50/40 px-3 py-2 text-base outline-none focus:border-purple-500" />
@@ -638,7 +698,7 @@ export default function StaffPurchasesPage() {
                       </ul>
                     )}
                     {normalize(search) && candidates.length === 0 && <p className="mt-1 text-xs text-gray-400">見つかりません</p>}
-                    {kind === 'personal_order' && (
+                    {!deduct && (
                       <button onClick={() => { setFreeItem(true); setItemName(search); setSearch(''); setUnitPrice('') }} className="mt-1 text-xs text-purple-700 underline">
                         一覧にない商品を入力する
                       </button>
@@ -691,11 +751,18 @@ export default function StaffPurchasesPage() {
                     {staffOptions}
                   </select>
                 </label>
-                <label>種類
+                <label>在庫
+                  <select value={listDeduct} onChange={(event) => setListDeduct(event.target.value as 'all' | 'yes' | 'no')} className="block rounded-lg border border-gray-200 px-2 py-1.5 text-base">
+                    <option value="all">すべて</option>
+                    <option value="yes">在庫から引いた</option>
+                    <option value="no">在庫から引いていない</option>
+                  </select>
+                </label>
+                <label>集金先
                   <select value={listKind} onChange={(event) => setListKind(event.target.value as Kind | 'all')} className="block rounded-lg border border-gray-200 px-2 py-1.5 text-base">
                     <option value="all">すべて</option>
-                    <option value="store_stock">店舗在庫から</option>
-                    <option value="personal_order">個人発注</option>
+                    <option value="store_stock">金庫（オーナー渡し）</option>
+                    <option value="personal_order">ディーラー支払い</option>
                     <option value="legacy">過去分</option>
                   </select>
                 </label>
@@ -733,7 +800,7 @@ export default function StaffPurchasesPage() {
                       <th className="border border-gray-200 px-1 py-1.5 text-center text-[10px]">渡す</th>
                       <th className="border border-gray-200 px-2 py-1.5 text-left">日付</th>
                       <th className="border border-gray-200 px-2 py-1.5 text-left">スタッフ</th>
-                      <th className="border border-gray-200 px-2 py-1.5 text-left">種類</th>
+                      <th className="border border-gray-200 px-2 py-1.5 text-left">在庫／集金先</th>
                       <th className="border border-gray-200 px-2 py-1.5 text-left">商品</th>
                       <th className="border border-gray-200 px-2 py-1.5 text-right">数</th>
                       <th className="border border-gray-200 px-2 py-1.5 text-right">単価</th>
@@ -805,7 +872,8 @@ export default function StaffPurchasesPage() {
                           <td className="border border-gray-200 px-2 py-1.5 text-xs">{row.purchased_on.slice(5).replace('-', '/')}<span className="ml-1 text-gray-400">{row.store_id !== null ? storeMap.get(row.store_id)?.name : ''}</span></td>
                           <td className="border border-gray-200 px-2 py-1.5">{staffName(row.staff_id, row.legacy_name)}</td>
                           <td className="border border-gray-200 px-2 py-1.5 text-xs">
-                            <span className={`rounded px-1.5 py-0.5 ${row.kind === 'store_stock' ? 'bg-green-50 text-green-700' : 'bg-purple-50 text-purple-700'}`}>{KIND_LABEL[row.kind]}</span>
+                            <span className={`block w-fit rounded px-1.5 py-0.5 ${row.deduct_stock ? 'bg-blue-50 text-blue-700' : 'bg-gray-100 text-gray-600'}`}>{row.deduct_stock ? '在庫から' : '在庫引かない'}</span>
+                            <span className={`mt-0.5 block w-fit rounded px-1.5 py-0.5 ${row.kind === 'store_stock' ? 'bg-green-50 text-green-700' : 'bg-purple-50 text-purple-700'}`}>{row.kind === 'store_stock' ? '金庫' : 'ディーラー'}</span>
                             {row.kind === 'personal_order' && (editing
                               ? <input list="dealer-names" value={editDealer} onChange={(event) => setEditDealer(event.target.value)} placeholder="ディーラー" className="mt-1 block w-28 rounded border border-gray-200 px-1 py-0.5 text-base" />
                               : <span className="mt-0.5 block text-[11px] text-purple-700">{row.dealer}</span>)}
@@ -875,7 +943,7 @@ export default function StaffPurchasesPage() {
             <div className="mt-2 flex flex-wrap items-end gap-2 text-xs text-gray-500">
               <label>スタッフ
                 <select value={sumStaff ?? ''} onChange={(event) => setSumStaff(event.target.value ? Number(event.target.value) : null)} className="block rounded-lg border border-gray-200 px-2 py-1.5 text-base">
-                  <option value="">選んでください</option>
+                  <option value="">全員</option>
                   {staffOptions}
                 </select>
               </label>
@@ -883,38 +951,101 @@ export default function StaffPurchasesPage() {
               <label>いつまで<input type="date" value={sumTo} onChange={(event) => setSumTo(event.target.value)} className="block rounded-lg border border-gray-200 px-2 py-1.5 text-base" /></label>
             </div>
 
-            {summary && (
-              <div className="mt-3 space-y-3">
-                <div className="grid grid-cols-3 gap-2 text-center">
-                  <div className="rounded-xl bg-gray-50 p-2"><p className="text-xs text-gray-500">合計</p><p className="text-lg font-bold">{yen(summary.total)}</p></div>
-                  <div className="rounded-xl bg-gray-50 p-2"><p className="text-xs text-gray-500">集金済み</p><p className="text-lg font-bold">{yen(summary.collected)}</p></div>
-                  <div className="rounded-xl bg-amber-50 p-2"><p className="text-xs text-amber-700">支払いが必要</p><p className="text-lg font-bold text-amber-700">{yen(summary.unpaid)}</p></div>
-                </div>
-                <table className="w-full border-collapse text-sm">
+            {sumStaff === null && (
+              <div className="mt-3 overflow-x-auto">
+                <p className="mb-1 text-xs text-gray-500">名前を押すと、その人の明細が出ます。</p>
+                <table className="w-full min-w-max border-collapse text-sm">
                   <thead>
                     <tr className="bg-gray-100 text-xs text-gray-500">
-                      <th className="border border-gray-200 px-2 py-1.5 text-left">商品</th>
-                      <th className="border border-gray-200 px-2 py-1.5 text-left">種類</th>
-                      <th className="border border-gray-200 px-2 py-1.5 text-right">単価</th>
-                      <th className="border border-gray-200 px-2 py-1.5 text-right">数</th>
-                      <th className="border border-gray-200 px-2 py-1.5 text-right">金額</th>
-                      <th className="border border-gray-200 px-2 py-1.5 text-right">うち未集金</th>
+                      <th className="border border-gray-200 px-2 py-1.5 text-left">スタッフ</th>
+                      <th className="border border-gray-200 px-2 py-1.5 text-right">件数</th>
+                      <th className="border border-gray-200 px-2 py-1.5 text-right">合計</th>
+                      <th className="border border-gray-200 px-2 py-1.5 text-right text-green-700">金庫へ</th>
+                      <th className="border border-gray-200 px-2 py-1.5 text-right text-purple-700">ディーラーへ</th>
+                      <th className="border border-gray-200 px-2 py-1.5 text-right">過去分</th>
+                      <th className="border border-gray-200 bg-amber-50 px-2 py-1.5 text-right text-amber-700">未集金</th>
                     </tr>
                   </thead>
                   <tbody>
-                    {summary.items.map((item) => (
-                      <tr key={`${item.product_id ?? `name:${item.item_name}`}_${item.item_detail ?? ''}_${item.kind}_${item.unit_price}`}>
-                        <td className="border border-gray-200 px-2 py-1.5">{rowLabel(item)}</td>
-                        <td className="border border-gray-200 px-2 py-1.5 text-xs">{KIND_LABEL[item.kind]}</td>
-                        <td className="border border-gray-200 px-2 py-1.5 text-right">{yen(item.unit_price)}</td>
-                        <td className="border border-gray-200 px-2 py-1.5 text-right">{item.quantity}</td>
-                        <td className="border border-gray-200 px-2 py-1.5 text-right font-medium">{yen(item.amount)}</td>
-                        <td className={`border border-gray-200 px-2 py-1.5 text-right ${item.unpaid > 0 ? 'text-amber-600' : 'text-gray-300'}`}>{item.unpaid > 0 ? yen(item.unpaid) : '−'}</td>
+                    {staffTotals.list.map((item) => (
+                      <tr key={`${item.staffId ?? item.name}`}>
+                        <td className="border border-gray-200 px-2 py-1.5">
+                          {item.staffId !== null
+                            ? <button onClick={() => setSumStaff(item.staffId)} className="font-medium text-blue-700 underline">{item.name}</button>
+                            : item.name}
+                        </td>
+                        <td className="border border-gray-200 px-2 py-1.5 text-right">{item.count}</td>
+                        <td className="border border-gray-200 px-2 py-1.5 text-right font-medium">{yen(item.total)}</td>
+                        <td className="border border-gray-200 px-2 py-1.5 text-right">{item.safe ? yen(item.safe) : '−'}</td>
+                        <td className="border border-gray-200 px-2 py-1.5 text-right">{item.dealer ? yen(item.dealer) : '−'}</td>
+                        <td className="border border-gray-200 px-2 py-1.5 text-right text-gray-500">{item.legacy ? yen(item.legacy) : '−'}</td>
+                        <td className={`border border-gray-200 bg-amber-50/40 px-2 py-1.5 text-right ${item.unpaid > 0 ? 'font-bold text-amber-700' : 'text-gray-300'}`}>{item.unpaid > 0 ? yen(item.unpaid) : '−'}</td>
                       </tr>
                     ))}
+                    {staffTotals.list.length > 0 && (
+                      <tr className="bg-gray-50 font-bold">
+                        <td className="border border-gray-200 px-2 py-1.5">合計</td>
+                        <td className="border border-gray-200 px-2 py-1.5 text-right">{staffTotals.sum.count}</td>
+                        <td className="border border-gray-200 px-2 py-1.5 text-right">{yen(staffTotals.sum.total)}</td>
+                        <td className="border border-gray-200 px-2 py-1.5 text-right">{yen(staffTotals.sum.safe)}</td>
+                        <td className="border border-gray-200 px-2 py-1.5 text-right">{yen(staffTotals.sum.dealer)}</td>
+                        <td className="border border-gray-200 px-2 py-1.5 text-right">{yen(staffTotals.sum.legacy)}</td>
+                        <td className="border border-gray-200 bg-amber-50 px-2 py-1.5 text-right text-amber-700">{yen(staffTotals.sum.unpaid)}</td>
+                      </tr>
+                    )}
                   </tbody>
                 </table>
-                {summary.items.length === 0 && <p className="py-4 text-center text-sm text-gray-400">この期間の購入はありません</p>}
+                {staffTotals.list.length === 0 && <p className="py-4 text-center text-sm text-gray-400">この期間の購入はありません</p>}
+              </div>
+            )}
+
+            {summary && (
+              <div className="mt-3 space-y-3">
+                <button onClick={() => setSumStaff(null)} className="text-xs text-blue-600 underline">← 全員の一覧に戻る</button>
+                <div className="grid grid-cols-2 gap-2 text-center sm:grid-cols-4">
+                  <div className="rounded-xl bg-gray-50 p-2"><p className="text-xs text-gray-500">合計</p><p className="text-lg font-bold">{yen(summary.total)}</p></div>
+                  <div className="rounded-xl bg-green-50 p-2"><p className="text-xs text-green-700">金庫へ</p><p className="text-lg font-bold text-green-800">{yen(summary.safe)}</p></div>
+                  <div className="rounded-xl bg-purple-50 p-2"><p className="text-xs text-purple-700">ディーラーへ</p><p className="text-lg font-bold text-purple-800">{yen(summary.dealer)}</p></div>
+                  <div className="rounded-xl bg-amber-50 p-2"><p className="text-xs text-amber-700">支払いが必要（未集金）</p><p className="text-lg font-bold text-amber-700">{yen(summary.unpaid)}</p></div>
+                </div>
+                {summary.sections.map((section) => (
+                  <div key={section.kind}>
+                    <div className="flex items-baseline justify-between">
+                      <h3 className={`text-sm font-bold ${section.kind === 'store_stock' ? 'text-green-800' : section.kind === 'personal_order' ? 'text-purple-800' : 'text-gray-600'}`}>
+                        {section.kind === 'store_stock' ? '金庫（オーナー渡し）' : section.kind === 'personal_order' ? 'ディーラー支払い' : '過去分（シートから取り込み）'}
+                      </h3>
+                      <span className="text-xs text-gray-500">小計 <b className="text-gray-800">{yen(section.total)}</b>{section.unpaid > 0 && <>・未集金 <b className="text-amber-700">{yen(section.unpaid)}</b></>}</span>
+                    </div>
+                    <table className="mt-1 w-full border-collapse text-sm">
+                      <thead>
+                        <tr className="bg-gray-100 text-xs text-gray-500">
+                          <th className="border border-gray-200 px-2 py-1.5 text-left">商品</th>
+                          <th className="border border-gray-200 px-2 py-1.5 text-left">在庫</th>
+                          <th className="border border-gray-200 px-2 py-1.5 text-right">単価</th>
+                          <th className="border border-gray-200 px-2 py-1.5 text-right">数</th>
+                          <th className="border border-gray-200 px-2 py-1.5 text-right">金額</th>
+                          <th className="border border-gray-200 px-2 py-1.5 text-right">うち未集金</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {section.items.map((item, index) => (
+                          <tr key={index}>
+                            <td className="border border-gray-200 px-2 py-1.5">
+                              {rowLabel(item)}
+                              {item.dealer && <span className="ml-1 text-[11px] text-purple-700">{item.dealer}</span>}
+                            </td>
+                            <td className="border border-gray-200 px-2 py-1.5 text-xs text-gray-600">{item.kind === 'legacy' ? '−' : item.deduct ? '在庫から' : '引かない'}</td>
+                            <td className="border border-gray-200 px-2 py-1.5 text-right">{item.kind === 'legacy' ? '−' : yen(item.unit_price)}</td>
+                            <td className="border border-gray-200 px-2 py-1.5 text-right">{item.quantity}</td>
+                            <td className="border border-gray-200 px-2 py-1.5 text-right font-medium">{yen(item.amount)}</td>
+                            <td className={`border border-gray-200 px-2 py-1.5 text-right ${item.unpaid > 0 ? 'text-amber-600' : 'text-gray-300'}`}>{item.unpaid > 0 ? yen(item.unpaid) : '−'}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                ))}
+                {summary.sections.length === 0 && <p className="py-4 text-center text-sm text-gray-400">この期間の購入はありません</p>}
                 {summary.unpaidIds.length > 0 && (
                   <button onClick={() => {
                     if (confirm(`${staffName(sumStaff!)}さんの未集金 ${summary.unpaidIds.length}件（${yen(summary.unpaid)}）を、今日の日付で集金済みにします。よろしいですか？`)) {
