@@ -38,6 +38,7 @@ type Purchase = {
 type Payout = { id: string; box: 'safe' | 'dealer'; dealer: string | null; paid_at: string; amount: number; note: string | null }
 type Opening = { id: string; box: 'safe' | 'dealer'; dealer: string | null; amount: number; as_of: string; note: string | null }
 type Tab = 'entry' | 'summary' | 'cash' | 'roster'
+type CartLine = { key: string; product_id: number | null; item_name: string | null; item_detail: string | null; quantity: number; unit_price: number; label: string }
 
 // スタッフ購入は2026年10月から
 const START_DATE = '2026-10-01'
@@ -106,6 +107,8 @@ export default function StaffPurchasesPage() {
   // 商品「その他」を選んだときの中身（例：ヘアオイル試供品）
   const [itemDetail, setItemDetail] = useState('')
   const [quantity, setQuantity] = useState('')
+  // まとめて登録する商品（③で「＋ この商品を追加」したもの）
+  const [cart, setCart] = useState<CartLine[]>([])
   const [unitPrice, setUnitPrice] = useState('')
   const [collected, setCollected] = useState(false)
   const [note, setNote] = useState('')
@@ -250,44 +253,83 @@ export default function StaffPurchasesPage() {
     setProductId(product.id)
     setSearch('')
     setUnitPrice(product.cost_price === null ? '' : String(withTax(product.cost_price)))
-    setDealer(product.dealer ?? '')
-    // 「その他」は在庫を持たないので、在庫から引かない
-    if (product.name.trim() === 'その他') setDeduct(false)
+    if (!dealer.trim()) setDealer(product.dealer ?? '')
+  }
+
+  // ③で入力中の商品を1行にする。何も入っていなければ empty
+  function currentLine(): { empty: true } | { empty: false; line?: CartLine; error?: string } {
+    const useFreeItem = deduct === false && freeItem
+    const started = useFreeItem ? Boolean(itemName.trim()) : productId !== null
+    if (!started && !quantity && !unitPrice) return { empty: true }
+    if (useFreeItem ? !itemName.trim() : productId === null) return { empty: false, error: useFreeItem ? '商品名を入力してください。' : '商品を選んでください。' }
+    if (!useFreeItem && isOther(productId) && !itemDetail.trim()) return { empty: false, error: '「その他」は中身を入力してください。' }
+    const qty = Number(quantity)
+    const price = parseYen(unitPrice)
+    if (!Number.isInteger(qty) || qty <= 0) return { empty: false, error: '数は1以上の整数で入力してください。' }
+    if (price === null) return { empty: false, error: '単価（税込）を入力してください。' }
+    const detail = !useFreeItem && isOther(productId) ? itemDetail.trim() : null
+    const label = useFreeItem ? `${itemName.trim()}（一覧外）` : `${productLabel(productId!)}${detail ? `（${detail}）` : ''}`
+    return {
+      empty: false,
+      line: {
+        key: `${Date.now()}_${Math.random()}`, product_id: useFreeItem ? null : productId, item_name: useFreeItem ? itemName.trim() : null,
+        item_detail: detail, quantity: qty, unit_price: price, label,
+      },
+    }
+  }
+
+  function clearEditor() {
+    setProductId(null)
+    setFreeItem(false)
+    setItemName('')
+    setItemDetail('')
+    setQuantity('')
+    setUnitPrice('')
+    setSearch('')
+  }
+
+  function addToCart() {
+    setError('')
+    const current = currentLine()
+    if (current.empty) { setError('追加する商品を選んでください。'); return }
+    if (!current.line) { setError(current.error ?? '入力を確認してください。'); return }
+    setCart((previous) => [...previous, current.line!])
+    clearEditor()
+  }
+
+  // 在庫・店舗を変えるときは、追加済みの商品を空にする（取扱商品が変わるため）
+  function changeStockSetting(apply: () => void) {
+    if (cart.length > 0 && !confirm('追加済みの商品を空にして選び直します。よろしいですか？')) return
+    setCart([])
+    apply()
   }
 
   async function addPurchase() {
     setError('')
     setMessage('')
-    const qty = Number(quantity)
-    const price = parseYen(unitPrice)
     if (deduct === null) { setError('在庫から引くかどうかを選んでください。'); return }
     if (kind === null) { setError('集金先を選んでください。'); return }
-    const useFreeItem = deduct === false && freeItem
     if (!storeId || !staffId) { setError('店舗とスタッフを選んでください。'); return }
     if (kind === 'personal_order' && !dealer.trim()) { setError('ディーラー支払いのときは、ディーラーを選んでください。'); return }
-    if (useFreeItem ? !itemName.trim() : !productId) { setError(useFreeItem ? '商品名を入力してください。' : '商品を選んでください。'); return }
-    if (!Number.isInteger(qty) || qty <= 0) { setError('数は1以上の整数で入力してください。'); return }
-    if (price === null) { setError('単価（税込）を入力してください。'); return }
     if (date < minDate) { setError(`${minDate.replaceAll('-', '/')} より前の日付では登録できません。`); return }
+    const current = currentLine()
+    if (!current.empty && !current.line) { setError(current.error ?? '入力を確認してください。'); return }
+    const lines = [...cart, ...(current.empty ? [] : [current.line!])]
+    if (lines.length === 0) { setError('商品を選んでください。'); return }
     setSaving(true)
-    const { error: saveError } = await supabase.rpc('add_staff_purchase', {
-      p_purchased_on: date, p_staff_id: staffId, p_store_id: storeId, p_product_id: useFreeItem ? null : productId,
-      p_quantity: qty, p_unit_price: price, p_kind: kind, p_collected: collected, p_note: note || null,
-      p_item_name: useFreeItem ? itemName.trim() : null,
-      p_dealer: kind === 'personal_order' ? dealer.trim() : null,
-      p_deduct_stock: deduct,
-      p_item_detail: !useFreeItem && isOther(productId) ? itemDetail.trim() : null,
+    const { error: saveError } = await supabase.rpc('add_staff_purchase_batch', {
+      p_purchased_on: date, p_staff_id: staffId, p_store_id: storeId, p_kind: kind, p_collected: collected, p_note: note || null,
+      p_dealer: kind === 'personal_order' ? dealer.trim() : null, p_deduct_stock: deduct,
+      p_lines: lines.map((line) => ({ product_id: line.product_id, item_name: line.item_name, item_detail: line.item_detail, quantity: line.quantity, unit_price: line.unit_price })),
     })
     setSaving(false)
-    if (saveError) { setError(`登録できませんでした：${saveError.message}`); return }
-    setMessage(`${staffName(staffId)}：${useFreeItem ? itemName.trim() : productLabel(productId!)} ×${qty}（${yen(qty * price)}）を登録しました。`)
-    setProductId(null)
-    setItemName('')
-    setItemDetail('')
-    setQuantity('')
+    if (saveError) { setError(`登録できませんでした（1つも登録していません）：${saveError.message}`); return }
+    const total = lines.reduce((sum, line) => sum + line.quantity * line.unit_price, 0)
+    setMessage(`${staffName(staffId)}：${lines.length}点（${yen(total)}）を登録しました。`)
+    setCart([])
+    clearEditor()
     setDeduct(null)
     setKind(null)
-    setUnitPrice('')
     setNote('')
     setCollected(false)
     await load()
@@ -637,7 +679,7 @@ export default function StaffPurchasesPage() {
                     setStaffId(id)
                     // 店舗はスタッフの所属店舗を最初に入れておく（変えられる）
                     const home = id !== null ? staffMap.get(id)?.store_id : null
-                    if (home) { setStoreId(home); setProductId(null) }
+                    if (home && home !== storeId && cart.length === 0) { setStoreId(home); clearEditor() }
                   }} className="mt-1 block w-full rounded-lg border border-gray-200 px-2 py-2 text-base">
                     <option value="">選んでください</option>
                     {staffOptions}
@@ -652,7 +694,7 @@ export default function StaffPurchasesPage() {
               <p className="mt-4 text-sm font-bold text-gray-700">② 店舗の在庫から引きますか？</p>
               <div className="mt-1 grid grid-cols-2 gap-2">
                 {([[true, '在庫から引く', '店舗で発注した在庫を売った'], [false, '在庫から引かない', 'スタッフ用に発注してそのまま渡した など']] as [boolean, string, string][]).map(([value, text, hint]) => (
-                  <button key={text} disabled={value && isOther(productId)} onClick={() => { setDeduct(value); setProductId(null); setFreeItem(false) }}
+                  <button key={text} onClick={() => { if (deduct !== value) changeStockSetting(() => { setDeduct(value); clearEditor() }) }}
                     className={`rounded-xl border-2 px-3 py-2.5 text-left disabled:opacity-40 ${deduct === value ? 'border-blue-500 bg-blue-50' : 'border-gray-200 bg-white'}`}>
                     <span className={`block text-sm font-bold ${deduct === value ? 'text-blue-800' : 'text-gray-700'}`}>{deduct === value ? '● ' : '○ '}{text}</span>
                     <span className="block text-[11px] text-gray-500">{hint}</span>
@@ -661,14 +703,29 @@ export default function StaffPurchasesPage() {
               </div>
               {deduct !== null && (
                 <label className="mt-2 block text-xs text-gray-500">{deduct ? '在庫を引く店舗' : '店舗（記録用）'}
-                  <select value={storeId ?? ''} onChange={(event) => { setStoreId(Number(event.target.value)); setProductId(null) }} className="mt-1 block w-full rounded-lg border border-gray-200 px-2 py-2 text-base sm:w-64">
+                  <select value={storeId ?? ''} onChange={(event) => { const next = Number(event.target.value); changeStockSetting(() => { setStoreId(next); clearEditor() }) }} className="mt-1 block w-full rounded-lg border border-gray-200 px-2 py-2 text-base sm:w-64">
                     {stores.map((store) => <option key={store.id} value={store.id}>{store.name}</option>)}
                   </select>
                 </label>
               )}
 
               {/* ③ 商品 */}
-              <p className="mt-4 text-sm font-bold text-gray-700">③ 何を・いくつ</p>
+              <p className="mt-4 text-sm font-bold text-gray-700">③ 何を・いくつ <span className="text-xs font-normal text-gray-500">（複数ある時は「＋ この商品を追加」で続けて入れられます）</span></p>
+              {cart.length > 0 && (
+                <div className="mt-1 rounded-xl border border-blue-200 bg-blue-50/50 p-2">
+                  <p className="px-1 text-xs font-bold text-blue-800">追加済み {cart.length}点</p>
+                  <ul className="mt-1 divide-y divide-blue-100">
+                    {cart.map((line) => (
+                      <li key={line.key} className="flex items-center gap-2 px-1 py-1.5 text-sm">
+                        <span className="min-w-0 flex-1 break-words">{line.label}</span>
+                        <span className="shrink-0 text-gray-600">×{line.quantity}</span>
+                        <span className="w-20 shrink-0 text-right font-medium">{yen(line.quantity * line.unit_price)}</span>
+                        <button onClick={() => setCart((previous) => previous.filter((item) => item.key !== line.key))} aria-label="この商品を外す" className="shrink-0 px-1 text-lg text-gray-400">×</button>
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
               {deduct === null ? (
                 <p className="mt-1 rounded-lg bg-gray-50 px-3 py-2 text-xs text-gray-400">先に②を選ぶと、商品を選べます</p>
               ) : (
@@ -734,6 +791,7 @@ export default function StaffPurchasesPage() {
                   </p>
                 </div>
               </div>
+              <button onClick={addToCart} className="mt-2 w-full rounded-xl border-2 border-dashed border-blue-300 py-2 text-sm font-bold text-blue-700 hover:bg-blue-50">＋ この商品を追加して、次の商品を選ぶ</button>
               </>
               )}
 
@@ -765,20 +823,23 @@ export default function StaffPurchasesPage() {
 
               {/* 確認 */}
               {(() => {
-                const qty = Number(quantity) || 0
-                const price = parseYen(unitPrice)
-                const productText = deduct === false && freeItem ? (itemName.trim() || '（商品名）') : selectedProduct ? `${productLabel(selectedProduct.id)}${isOther(selectedProduct.id) && itemDetail.trim() ? `（${itemDetail.trim()}）` : ''}` : null
+                const current = currentLine()
+                const lines = [...cart, ...(!current.empty && current.line ? [current.line] : [])]
+                const total = lines.reduce((sum, line) => sum + line.quantity * line.unit_price, 0)
                 const missing = [
-                  staffId === null && 'スタッフ', deduct === null && '在庫', !productText && '商品', qty <= 0 && '数', price === null && '単価', kind === null && '集金先',
+                  staffId === null && 'スタッフ', deduct === null && '在庫', lines.length === 0 && '商品',
+                  !current.empty && !current.line && '入力中の商品（数・単価など）', kind === null && '集金先',
                   kind === 'personal_order' && !dealer.trim() && 'ディーラー',
                 ].filter(Boolean) as string[]
+                const hasOther = lines.some((line) => isOther(line.product_id))
                 return (
                   <div className={`mt-4 rounded-xl px-3 py-2.5 text-sm ${missing.length === 0 ? 'border border-blue-200 bg-blue-50 text-blue-900' : 'bg-gray-50 text-gray-500'}`}>
                     {missing.length === 0 ? (
                       <>
-                        <b>{staffName(staffId)}</b>さん：{productText} ×{qty}　<b>{yen(qty * price!)}</b>
+                        <b>{staffName(staffId)}</b>さん：{lines.length}点　合計 <b>{yen(total)}</b>
+                        <span className="block text-xs">{lines.map((line) => `${line.label} ×${line.quantity}`).join('、')}</span>
                         <span className="block text-xs">
-                          {deduct ? `${storeMap.get(storeId ?? -1)?.name ?? ''}の在庫から${qty}個引く` : '在庫は動かさない'}
+                          {deduct ? `${storeMap.get(storeId ?? -1)?.name ?? ''}の在庫から引く${hasOther ? '（「その他」は引かない）' : ''}` : '在庫は動かさない'}
                           ／集金先：{kind === 'store_stock' ? '金庫（オーナー渡し）' : `ディーラー支払い（${dealer.trim()}）`}
                           {collected ? '／その場で集金済み' : '／まだ集金していない'}
                         </span>
@@ -789,7 +850,7 @@ export default function StaffPurchasesPage() {
               })()}
               <button onClick={() => void addPurchase()} disabled={saving || deduct === null || kind === null}
                 className="mt-3 w-full rounded-xl bg-blue-600 py-3 text-sm font-bold text-white disabled:bg-gray-300">
-                {saving ? '登録しています...' : deduct === null || kind === null ? '②在庫と④集金先を選ぶと登録できます' : 'この内容で登録する'}
+                {saving ? '登録しています...' : deduct === null || kind === null ? '②在庫と④集金先を選ぶと登録できます' : 'この内容でまとめて登録する'}
               </button>
             </section>
 
