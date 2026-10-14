@@ -8,6 +8,7 @@ import { supabase } from '@/lib/supabase'
 import { fetchAll } from '@/lib/fetchAll'
 import { withTax, yen } from '@/lib/tax'
 import { todayInTokyo } from '@/lib/presale'
+import RosterManager from './RosterManager'
 
 type Store = { id: number; name: string }
 type Staff = { id: number; store_id: number | null; name: string; sort_order: number; is_active: boolean }
@@ -36,7 +37,7 @@ type Purchase = {
 }
 type Payout = { id: string; box: 'safe' | 'dealer'; dealer: string | null; paid_at: string; amount: number; note: string | null }
 type Opening = { id: string; box: 'safe' | 'dealer'; dealer: string | null; amount: number; as_of: string; note: string | null }
-type Tab = 'entry' | 'summary' | 'cash'
+type Tab = 'entry' | 'summary' | 'cash' | 'roster'
 
 // スタッフ購入は2026年10月から
 const START_DATE = '2026-10-01'
@@ -613,7 +614,7 @@ export default function StaffPurchasesPage() {
         </div>
 
         <div className="flex gap-1 rounded-xl bg-gray-100 p-1 text-sm font-medium">
-          {([['entry', '登録と一覧'], ['summary', 'スタッフ別の集計'], ['cash', '渡した記録']] as [Tab, string][]).map(([key, label]) => (
+          {([['entry', '登録と一覧'], ['summary', 'スタッフ別の集計'], ['cash', '渡した記録'], ['roster', 'スタッフ名簿']] as [Tab, string][]).map(([key, label]) => (
             <button key={key} onClick={() => setTab(key)} className={`flex-1 rounded-lg px-3 py-2 ${tab === key ? 'bg-white text-gray-800 shadow-sm' : 'text-gray-500'}`}>{label}</button>
           ))}
         </div>
@@ -1112,6 +1113,8 @@ export default function StaffPurchasesPage() {
             )}
           </section>
         )}
+
+        {!loading && tab === 'roster' && <RosterManager stores={stores} staff={staff} onChanged={load} />}
 
         {!loading && tab === 'cash' && (
           <section className="rounded-2xl border border-gray-200 bg-white p-4 shadow-sm">
