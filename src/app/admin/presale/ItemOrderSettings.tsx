@@ -5,7 +5,7 @@ import { supabase } from '@/lib/supabase'
 import type { PresaleCampaign } from '@/lib/presale'
 
 type Store = { id: number; name: string }
-type Item = { product_id: number; brand: string | null; name: string }
+type Item = { product_id: number; brand: string | null; name: string; hidden: boolean }
 
 // 先行予約：店舗ごとの商品の並び（本部が設定）。店舗の予約ページの「商品を選ぶ」がこの順になる
 export default function ItemOrderSettings({ campaign, stores }: { campaign: PresaleCampaign; stores: Store[] }) {
@@ -24,13 +24,13 @@ export default function ItemOrderSettings({ campaign, stores }: { campaign: Pres
     if (!storeId) return
     setError('')
     const [itemResult, sortResult] = await Promise.all([
-      supabase.from('presale_items').select('product_id, product:products!inner(brand, name)').eq('campaign_id', campaign.id),
+      supabase.from('presale_items').select('product_id, hidden_store_ids, product:products!inner(brand, name)').eq('campaign_id', campaign.id),
       supabase.from('presale_store_item_sort').select('product_id, sort_order').eq('store_id', storeId),
     ])
     if (itemResult.error || sortResult.error) { setError('読み込めませんでした。'); return }
     const list = (itemResult.data ?? []).map((row) => {
       const product = Array.isArray(row.product) ? row.product[0] : row.product
-      return { product_id: row.product_id as number, brand: product.brand as string | null, name: product.name as string }
+      return { product_id: row.product_id as number, brand: product.brand as string | null, name: product.name as string, hidden: ((row.hidden_store_ids ?? []) as number[]).includes(storeId) }
     })
     const saved = new Map(((sortResult.data ?? []) as { product_id: number; sort_order: number }[]).map((row) => [row.product_id, row.sort_order]))
     const LAST = Number.MAX_SAFE_INTEGER
@@ -101,7 +101,7 @@ export default function ItemOrderSettings({ campaign, stores }: { campaign: Pres
           return (
             <li key={productId} className="flex items-center gap-2 px-3 py-2 text-sm">
               <span className="w-6 shrink-0 text-right text-xs text-gray-400">{index + 1}</span>
-              <span className="min-w-0 flex-1 break-words">{nameOf(item)}</span>
+              <span className={`min-w-0 flex-1 break-words ${item.hidden ? 'text-gray-300 line-through' : ''}`}>{nameOf(item)}{item.hidden && <span className="ml-1 text-[10px] text-gray-400 no-underline">（この店舗では非表示）</span>}</span>
               <button onClick={() => moveToTop(index)} disabled={index === 0} className="shrink-0 rounded bg-gray-100 px-2 py-1 text-xs text-gray-600 disabled:opacity-30">一番上へ</button>
               <button onClick={() => move(index, -1)} disabled={index === 0} aria-label="上へ" className="shrink-0 rounded bg-gray-100 px-2.5 py-1 text-sm font-bold text-gray-700 disabled:opacity-30">↑</button>
               <button onClick={() => move(index, 1)} disabled={index === order.length - 1} aria-label="下へ" className="shrink-0 rounded bg-gray-100 px-2.5 py-1 text-sm font-bold text-gray-700 disabled:opacity-30">↓</button>

@@ -275,6 +275,19 @@ function ItemSettings({ campaign, categories, stores }: { campaign: PresaleCampa
   }
 
   // 販売価格は税込で入力し、税抜で保存（価格表と同じ値を使う）
+  // 店舗ごとの表示・非表示（非表示の店舗では予約の商品選びに出ない）
+  async function toggleStoreVisible(product: RetailProduct, storeId: number) {
+    const item = items.get(product.id)
+    if (!item) return
+    const hidden = item.hidden_store_ids ?? []
+    const next = hidden.includes(storeId) ? hidden.filter((id) => id !== storeId) : [...hidden, storeId]
+    setBusy(`s_${product.id}_${storeId}`)
+    const { error: updateError } = await supabase.from('presale_items').update({ hidden_store_ids: next }).eq('campaign_id', campaign.id).eq('product_id', product.id)
+    setBusy('')
+    if (updateError) { setError(`保存できませんでした：${updateError.message}`); return }
+    setItems((previous) => new Map(previous).set(product.id, { ...item, hidden_store_ids: next }))
+  }
+
   async function savePrice(product: RetailProduct) {
     const key = `p_${product.id}`
     const raw = drafts[key]
@@ -335,7 +348,7 @@ function ItemSettings({ campaign, categories, stores }: { campaign: PresaleCampa
       </div>
       {error && <p className="mb-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}
       <div className="max-h-[65vh] overflow-auto rounded-xl border border-gray-100">
-        <table className="w-full min-w-[860px] text-xs">
+        <table className="w-full min-w-[980px] text-xs">
           <thead className="sticky top-0 z-10 bg-gray-50 text-gray-500">
             <tr>
               <th className="w-12 px-2 py-2 text-center">対象</th>
@@ -344,6 +357,7 @@ function ItemSettings({ campaign, categories, stores }: { campaign: PresaleCampa
               <th className="w-44 px-2 py-2 text-center">割引</th>
               <th className="w-28 px-2 py-2 text-center">割引後（税込）</th>
               <th className="w-20 px-2 py-2 text-center">まとめ買い対象外</th>
+              <th className="w-40 px-2 py-2 text-center">店舗に表示</th>
             </tr>
           </thead>
           <tbody>
@@ -354,7 +368,7 @@ function ItemSettings({ campaign, categories, stores }: { campaign: PresaleCampa
               return (
                 <Fragment key={product.id}>
                   {product.category_id !== visible[index - 1]?.category_id && (
-                    <tr><td colSpan={6} className="sticky top-8 z-[5] bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-600">{categoryName.get(product.category_id)}</td></tr>
+                    <tr><td colSpan={7} className="sticky top-8 z-[5] bg-slate-100 px-3 py-1.5 text-xs font-bold text-slate-600">{categoryName.get(product.category_id)}</td></tr>
                   )}
                   <tr className={`border-t border-gray-100 ${item ? 'bg-pink-50/40' : ''}`}>
                     <td className="px-2 py-1.5 text-center">
@@ -393,6 +407,22 @@ function ItemSettings({ campaign, categories, stores }: { campaign: PresaleCampa
                         <input type="checkbox" checked={item.bulk_excluded} title="美容機器など、まとめ買いの個数に数えない商品"
                           onChange={(event) => void saveDiscount(product, { bulk_excluded: event.target.checked })} className="h-4 w-4" />
                       ) : <span className="text-gray-300">−</span>}
+                    </td>
+                    <td className="px-2 py-1.5">
+                      {item ? (
+                        <div className="flex flex-wrap justify-center gap-1">
+                          {stores.map((store) => {
+                            const shown = !(item.hidden_store_ids ?? []).includes(store.id)
+                            return (
+                              <button key={store.id} onClick={() => void toggleStoreVisible(product, store.id)} disabled={busy === `s_${product.id}_${store.id}`}
+                                title={shown ? `${store.name}の予約ページに表示中（押すと非表示）` : `${store.name}では非表示（押すと表示）`}
+                                className={`rounded-full px-2 py-0.5 text-[11px] font-bold ${shown ? 'bg-pink-600 text-white' : 'bg-gray-100 text-gray-400 line-through'}`}>
+                                {store.name}
+                              </button>
+                            )
+                          })}
+                        </div>
+                      ) : <span className="block text-center text-gray-300">−</span>}
                     </td>
                   </tr>
                 </Fragment>

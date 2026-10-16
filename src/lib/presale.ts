@@ -18,6 +18,8 @@ export type PresaleItem = {
   discount_type: DiscountType
   discount_value: number
   bulk_excluded: boolean
+  // 予約の商品選びに出さない店舗（店舗ごとの表示・非表示）
+  hidden_store_ids?: number[]
 }
 
 export type PresaleItemWithProduct = PresaleItem & { brand: string | null; name: string; sale_price: number | null }

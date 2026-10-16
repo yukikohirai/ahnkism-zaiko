@@ -112,7 +112,9 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
   const sortedItems = useMemo(() => {
     const order = new Map(itemSort.filter((row) => row.store_id === draft.store_id).map((row) => [row.product_id, row.sort_order]))
     const LAST = Number.MAX_SAFE_INTEGER
-    return [...items].sort((a, b) => (order.get(a.product_id) ?? LAST) - (order.get(b.product_id) ?? LAST)
+    // 店舗ごとに非表示にした商品は、その店舗の商品選びに出さない
+    return items.filter((item) => draft.store_id === null || !(item.hidden_store_ids ?? []).includes(draft.store_id))
+      .sort((a, b) => (order.get(a.product_id) ?? LAST) - (order.get(b.product_id) ?? LAST)
       || `${a.brand ?? ''}${a.name}`.localeCompare(`${b.brand ?? ''}${b.name}`, 'ja'))
   }, [draft.store_id, itemSort, items])
   const staffMap = useMemo(() => new Map(staff.map((person) => [person.id, person])), [staff])
