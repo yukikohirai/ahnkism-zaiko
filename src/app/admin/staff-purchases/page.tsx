@@ -1,7 +1,7 @@
 'use client'
 
 import Link from 'next/link'
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { getCurrentProfile } from '@/lib/auth'
 import { supabase } from '@/lib/supabase'
@@ -33,6 +33,8 @@ type Purchase = {
   deduct_stock: boolean
   collected_on: string | null
   handed_on: string | null
+  // まとめて登録した商品は同じ batch_id（一覧で1つの塊に）
+  batch_id: string | null
   payout_id: string | null
   note: string | null
 }
@@ -174,7 +176,7 @@ export default function StaffPurchasesPage() {
       fetchAll((from, to) => supabase.from('products').select('id, brand, name, cost_price, dealer').eq('is_active', true).order('id').range(from, to)),
       fetchAll((from, to) => supabase.from('store_products').select('store_id, product_id').order('store_id').order('product_id').range(from, to)),
       fetchAll((from, to) => supabase.from('staff_purchases')
-        .select('id, purchased_on, staff_id, store_id, legacy_name, source_ref, product_id, item_name, item_detail, dealer, quantity, unit_price, kind, deduct_stock, collected_on, handed_on, payout_id, note')
+        .select('id, purchased_on, staff_id, store_id, legacy_name, source_ref, product_id, item_name, item_detail, dealer, quantity, unit_price, kind, deduct_stock, collected_on, handed_on, payout_id, batch_id, note')
         .order('purchased_on', { ascending: false }).order('created_at', { ascending: false }).order('id').range(from, to)),
       supabase.from('cash_payouts').select('id, box, dealer, paid_at, amount, note').order('paid_at', { ascending: false }),
       supabase.from('app_settings').select('value').eq('key', 'safe_threshold').maybeSingle(),
@@ -530,9 +532,18 @@ export default function StaffPurchasesPage() {
   // 一覧は20件ずつ。絞り込みを変えたら1ページ目に戻す
   const [listPage, setListPage] = useState(1)
   useEffect(() => { setListPage(1) }, [listDeduct, listDealer, listFrom, listKind, listStaff, listTo, onlyNotHanded, onlyUnpaid])
-  const pageCount = Math.max(1, Math.ceil(listRows.length / PAGE_SIZE))
+  // まとめて登録した分（同じ batch_id）は1つの塊にする。ページ送りは塊の数で数える
+  const listGroups = useMemo(() => {
+    const map = new Map<string, Purchase[]>()
+    listRows.forEach((row) => {
+      const key = row.batch_id ?? row.id
+      map.set(key, [...(map.get(key) ?? []), row])
+    })
+    return Array.from(map.entries()).map(([key, rows]) => ({ key, rows }))
+  }, [listRows])
+  const pageCount = Math.max(1, Math.ceil(listGroups.length / PAGE_SIZE))
   const currentPage = Math.min(listPage, pageCount)
-  const pageRows = listRows.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
+  const pageGroups = listGroups.slice((currentPage - 1) * PAGE_SIZE, currentPage * PAGE_SIZE)
 
   const amountOf = (row: Purchase) => row.quantity * row.unit_price
   const isUnpaid = (row: Purchase) => row.kind !== 'legacy' && !row.collected_on
@@ -926,8 +937,18 @@ export default function StaffPurchasesPage() {
                     </tr>
                   </thead>
                   <tbody>
-                    {pageRows.map((row) => {
+                    {pageGroups.map((group) => {
+                      const multi = group.rows.length > 1
+                      const groupTotal = group.rows.reduce((sum, item) => sum + item.quantity * item.unit_price, 0)
+                      const groupQty = group.rows.reduce((sum, item) => sum + item.quantity, 0)
+                      const groupCollected = group.rows.every((item) => Boolean(item.collected_on))
+                      const groupHanded = group.rows.some((item) => Boolean(item.handed_on))
+                      return (
+                    <Fragment key={group.key}>
+                    {group.rows.map((row, rowIndex) => {
                       const editing = editingId === row.id
+                      const showLead = !multi || rowIndex === 0
+                      const leadSpan = multi ? group.rows.length + 1 : undefined
                       if (row.kind === 'legacy') {
                         return (
                           <tr key={row.id} className="bg-gray-50/60">
@@ -981,12 +1002,19 @@ export default function StaffPurchasesPage() {
                         )
                       }
                       return (
-                        <tr key={row.id} className={row.collected_on ? '' : 'bg-amber-50/40'}>
+                        <tr key={row.id} className={`${row.collected_on ? '' : 'bg-amber-50/40'} ${multi && rowIndex === 0 ? 'border-t-2 border-t-blue-300' : ''}`}>
                           <td className="border border-gray-200 px-1 py-1.5 text-center">
                             {canHand(row) && <input type="checkbox" checked={handSelection.has(row.id)} onChange={() => toggleHand(row.id)} className="h-4 w-4" aria-label="ディーラーに渡す行として選ぶ" />}
                           </td>
-                          <td className="border border-gray-200 px-2 py-1.5 text-xs">{row.purchased_on.slice(5).replace('-', '/')}<span className="ml-1 text-gray-400">{row.store_id !== null ? storeMap.get(row.store_id)?.name : ''}</span></td>
-                          <td className="border border-gray-200 px-2 py-1.5">{staffName(row.staff_id, row.legacy_name)}</td>
+                          {showLead && (
+                            <>
+                              <td rowSpan={leadSpan} className={`border border-gray-200 px-2 py-1.5 align-top text-xs ${multi ? 'bg-white' : ''}`}>{row.purchased_on.slice(5).replace('-', '/')}<span className="ml-1 text-gray-400">{row.store_id !== null ? storeMap.get(row.store_id)?.name : ''}</span></td>
+                              <td rowSpan={leadSpan} className={`border border-gray-200 px-2 py-1.5 align-top ${multi ? 'bg-white font-medium' : ''}`}>
+                                {staffName(row.staff_id, row.legacy_name)}
+                                {multi && <span className="mt-0.5 block text-[11px] font-normal text-blue-700">まとめて{group.rows.length}点</span>}
+                              </td>
+                            </>
+                          )}
                           <td className="border border-gray-200 px-2 py-1.5 text-xs">
                             <span className={`block w-fit rounded px-1.5 py-0.5 ${row.deduct_stock ? 'bg-blue-50 text-blue-700' : 'bg-gray-100 text-gray-600'}`}>{row.deduct_stock ? '在庫から' : '在庫引かない'}</span>
                             <span className={`mt-0.5 block w-fit rounded px-1.5 py-0.5 ${row.kind === 'store_stock' ? 'bg-green-50 text-green-700' : 'bg-purple-50 text-purple-700'}`}>{row.kind === 'store_stock' ? '金庫' : 'ディーラー'}</span>
@@ -1036,6 +1064,26 @@ export default function StaffPurchasesPage() {
                         </tr>
                       )
                     })}
+                    {multi && (
+                      <tr className="bg-blue-50">
+                        <td className="border border-gray-200"></td>
+                        <td colSpan={2} className="border border-gray-200 px-2 py-1.5 text-right text-xs font-bold text-blue-800">合計 {group.rows.length}点</td>
+                        <td className="border border-gray-200 px-2 py-1.5 text-right font-bold text-blue-900">{groupQty}</td>
+                        <td className="border border-gray-200"></td>
+                        <td className="border border-gray-200 px-2 py-1.5 text-right text-base font-bold text-blue-900">{yen(groupTotal)}</td>
+                        <td className="border border-gray-200 px-2 py-1.5 text-center">
+                          <label className="flex items-center justify-center gap-1 text-xs text-blue-800" title="この塊の商品を全部まとめて集金済み（外す）にします">
+                            <input type="checkbox" checked={groupCollected} disabled={groupHanded && groupCollected}
+                              onChange={(event) => void setCollectedFor(group.rows.map((item) => item.id), event.target.checked)} className="h-4 w-4" />
+                            まとめて
+                          </label>
+                        </td>
+                        <td className="border border-gray-200"></td>
+                      </tr>
+                    )}
+                    </Fragment>
+                      )
+                    })}
                   </tbody>
                 </table>
                 {listRows.length === 0 && <p className="py-6 text-center text-sm text-gray-400">この条件の記録はありません</p>}
@@ -1043,7 +1091,7 @@ export default function StaffPurchasesPage() {
                   <div className="mt-3 flex items-center justify-center gap-3 text-sm">
                     <button onClick={() => setListPage(currentPage - 1)} disabled={currentPage <= 1}
                       className="rounded-lg border border-gray-300 px-4 py-2 font-bold text-gray-700 disabled:opacity-30">‹ 前へ</button>
-                    <span className="text-gray-600">{currentPage} / {pageCount} ページ（{(currentPage - 1) * PAGE_SIZE + 1}〜{Math.min(currentPage * PAGE_SIZE, listRows.length)}件目）</span>
+                    <span className="text-gray-600">{currentPage} / {pageCount} ページ</span>
                     <button onClick={() => setListPage(currentPage + 1)} disabled={currentPage >= pageCount}
                       className="rounded-lg border border-gray-300 px-4 py-2 font-bold text-gray-700 disabled:opacity-30">次へ ›</button>
                   </div>
