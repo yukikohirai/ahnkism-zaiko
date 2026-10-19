@@ -53,6 +53,7 @@ export type PresaleOrder = {
   total_amount: number
   delivered_at: string | null
   cancelled_at: string | null
+  note?: string | null
   created_at: string
   lines: OrderLine[]
 }

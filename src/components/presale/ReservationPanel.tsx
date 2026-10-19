@@ -18,11 +18,12 @@ type Draft = {
   customer_name: string
   stylist_id: string
   staff_id: string
+  note: string
   lines: DraftLine[]
 }
 
 function emptyDraft(storeId: number | null): Draft {
-  return { id: null, store_id: storeId, reserved_on: todayInTokyo(), customer_name: '', stylist_id: '', staff_id: '', lines: [{ product_id: '', quantity: '1', discount_type: '', discount_value: '' }] }
+  return { id: null, store_id: storeId, reserved_on: todayInTokyo(), customer_name: '', stylist_id: '', staff_id: '', note: '', lines: [{ product_id: '', quantity: '1', discount_type: '', discount_value: '' }] }
 }
 
 function normalize(value: string) {
@@ -37,7 +38,12 @@ type PortalData = {
   goals: StaffGoal[]
   orders: PresaleOrder[]
   item_sort?: ItemSort[]
+  other_staff?: (Staff & { store_name: string })[]
+  help_orders?: HelpOrder[]
 }
+
+// この店舗のスタッフが、ヘルプ先の他店で取った予約（目標の実績に入れる）
+type HelpOrder = Pick<PresaleOrder, 'id' | 'campaign_id' | 'store_id' | 'staff_id' | 'total_amount' | 'delivered_at' | 'cancelled_at'>
 
 type ItemSort = { store_id: number; product_id: number; sort_order: number }
 
@@ -52,6 +58,10 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
   const [items, setItems] = useState<PresaleItemWithProduct[]>([])
   const [tiers, setTiers] = useState<BulkTier[]>([])
   const [staff, setStaff] = useState<Staff[]>([])
+  // 他店のスタッフ（ヘルプ）。店舗ページでは別に受け取る。本部画面では staff に全員入っている
+  const [otherStaff, setOtherStaff] = useState<(Staff & { store_name?: string })[]>([])
+  const [helpOrders, setHelpOrders] = useState<HelpOrder[]>([])
+  const [showHelp, setShowHelp] = useState(false)
   const [goals, setGoals] = useState<StaffGoal[]>([])
   const [orders, setOrders] = useState<PresaleOrder[]>([])
   // 店舗ごとの商品の並び（本部が設定）。設定していない商品は後ろに名前順
@@ -75,6 +85,8 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
       setItems(portal.items.filter((item) => item.campaign_id === campaign.id))
       setTiers(portal.tiers.filter((tier) => tier.campaign_id === campaign.id))
       setStaff(portal.staff)
+      setOtherStaff(portal.other_staff ?? [])
+      setHelpOrders((portal.help_orders ?? []).filter((order) => order.campaign_id === campaign.id))
       setGoals(portal.goals.filter((goal) => goal.campaign_id === campaign.id))
       setOrders(portal.orders.filter((order) => order.campaign_id === campaign.id))
       setItemSort(portal.item_sort ?? [])
@@ -117,9 +129,30 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
       .sort((a, b) => (order.get(a.product_id) ?? LAST) - (order.get(b.product_id) ?? LAST)
       || `${a.brand ?? ''}${a.name}`.localeCompare(`${b.brand ?? ''}${b.name}`, 'ja'))
   }, [draft.store_id, itemSort, items])
-  const staffMap = useMemo(() => new Map(staff.map((person) => [person.id, person])), [staff])
+  const staffMap = useMemo(() => new Map([...staff, ...otherStaff].map((person) => [person.id, person])), [otherStaff, staff])
   const storeName = useMemo(() => new Map(stores.map((store) => [store.id, store.name])), [stores])
   const formStaff = staff.filter((person) => person.is_active && person.store_id === draft.store_id)
+  // ヘルプで来た他店のスタッフ（「他店のスタッフも選ぶ」を押したときだけ出す）
+  const helpStaff = (access ? otherStaff : staff.filter((person) => person.is_active && person.store_id !== null && person.store_id !== draft.store_id))
+  const helpSelected = [draft.stylist_id, draft.staff_id].some((id) => id && !formStaff.some((person) => String(person.id) === id))
+  const showHelpStaff = showHelp || helpSelected
+  const helpGroupMap = new Map<string, Staff[]>()
+  helpStaff.forEach((person) => {
+    const label: string = (person as { store_name?: string }).store_name || storeName.get(person.store_id ?? -1) || '他店'
+    helpGroupMap.set(label, [...(helpGroupMap.get(label) ?? []), person])
+  })
+  const helpGroups = Array.from(helpGroupMap.entries())
+  const staffOptions = (
+    <>
+      <option value="">選んでください</option>
+      {formStaff.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}
+      {showHelpStaff && helpGroups.map(([label, people]) => (
+        <optgroup key={label} label={`ヘルプ：${label}`}>
+          {people.map((person) => <option key={person.id} value={person.id}>{label}・{person.name}</option>)}
+        </optgroup>
+      ))}
+    </>
+  )
   const rpcAccess = { p_token: access?.token ?? null, p_pin: access?.pin ?? null }
 
   const draftLines = draft.lines
@@ -146,6 +179,7 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
       customer_name: order.customer_name,
       stylist_id: order.stylist_id ? String(order.stylist_id) : '',
       staff_id: order.staff_id ? String(order.staff_id) : '',
+      note: order.note ?? '',
       lines: order.lines.map((line) => ({
         product_id: String(line.product_id),
         quantity: String(line.quantity),
@@ -177,6 +211,7 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
         customer_name: draft.customer_name.trim(),
         stylist_id: draft.stylist_id,
         staff_id: draft.staff_id,
+        note: draft.note.trim(),
         lines: draftLines,
       },
     })
@@ -219,7 +254,7 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
     const rank = (order: PresaleOrder) => (order.cancelled_at ? 2 : order.delivered_at ? 1 : 0)
     return scopedOrders
       .filter((order) => !onlyOpen || (!order.delivered_at && !order.cancelled_at))
-      .filter((order) => !keyword || normalize(`${order.customer_name}${order.lines.map((line) => itemMap.get(line.product_id)?.name ?? '').join('')}`).includes(keyword))
+      .filter((order) => !keyword || normalize(`${order.customer_name}${order.note ?? ''}${order.lines.map((line) => itemMap.get(line.product_id)?.name ?? '').join('')}`).includes(keyword))
       .sort((a, b) => rank(a) - rank(b) || b.reserved_on.localeCompare(a.reserved_on) || b.created_at.localeCompare(a.created_at))
   }, [itemMap, onlyOpen, scopedOrders, search])
 
@@ -237,7 +272,7 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
     return staff
       .filter((person) => targetStores.includes(person.store_id))
       .map((person) => {
-        const mine = orders.filter((order) => !order.cancelled_at && order.staff_id === person.id)
+        const mine = [...orders, ...helpOrders].filter((order) => !order.cancelled_at && order.staff_id === person.id)
         return {
           person,
           goal: goalMap.get(person.id) ?? 0,
@@ -247,7 +282,7 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
         }
       })
       .filter((row) => row.person.is_active || row.count > 0)
-  }, [filterStore, goals, orders, staff, storeId, stores])
+  }, [filterStore, goals, helpOrders, orders, staff, storeId, stores])
 
   return (
     <div className="space-y-4">
@@ -277,18 +312,27 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
           <label className="block text-xs font-medium text-gray-500">担当スタイリスト
             <select value={draft.stylist_id} onChange={(event) => setDraft({ ...draft, stylist_id: event.target.value })}
               className="mt-1 block w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-base">
-              <option value="">選んでください</option>
-              {formStaff.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}
+              {staffOptions}
             </select>
           </label>
           <label className="block text-xs font-medium text-gray-500">お勧めしたスタッフ
             <select value={draft.staff_id} onChange={(event) => setDraft({ ...draft, staff_id: event.target.value })}
               className="mt-1 block w-full rounded-xl border border-gray-200 bg-white px-3 py-2.5 text-base">
-              <option value="">選んでください</option>
-              {formStaff.map((person) => <option key={person.id} value={person.id}>{person.name}</option>)}
+              {staffOptions}
             </select>
           </label>
         </div>
+        {draft.store_id !== null && helpStaff.length > 0 && (
+          <label className="mt-2 flex w-fit items-center gap-2 text-xs text-gray-600">
+            <input type="checkbox" checked={showHelpStaff} disabled={helpSelected} onChange={(event) => setShowHelp(event.target.checked)} className="h-4 w-4" />
+            他店のスタッフも選ぶ（ヘルプ）
+          </label>
+        )}
+        <label className="mt-3 block text-xs font-medium text-gray-500">メモ（任意）
+          <textarea value={draft.note} onChange={(event) => setDraft({ ...draft, note: event.target.value })} rows={2}
+            placeholder="例：11/20以降に来店予定、ギフト包装希望 など"
+            className="mt-1 block w-full rounded-xl border border-gray-200 px-3 py-2 text-base" />
+        </label>
         {draft.store_id !== null && formStaff.length === 0 && (
           <p className="mt-2 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-700">この店舗のスタッフ名簿がまだありません。本部に登録を依頼してください。</p>
         )}
@@ -446,6 +490,7 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
                     {order.customer_name} 様
                     {order.applied_percent !== null && <span className="ml-2 rounded bg-pink-100 px-1.5 py-0.5 text-[10px] text-pink-700">まとめ買い{Number(order.applied_percent)}%</span>}
                   </div>
+                  {order.note && <p className="mt-0.5 whitespace-pre-wrap rounded-md bg-yellow-50 px-2 py-1 text-xs text-yellow-900">メモ：{order.note}</p>}
                   <ul className="mt-0.5 space-y-0.5 text-sm text-gray-700">
                     {order.lines.map((line) => {
                       const item = itemMap.get(line.product_id)
