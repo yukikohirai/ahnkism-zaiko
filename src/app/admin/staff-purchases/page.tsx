@@ -934,6 +934,7 @@ export default function StaffPurchasesPage() {
                       <th className="border border-gray-200 px-2 py-1.5 text-right">金額</th>
                       <th className="border border-gray-200 px-2 py-1.5 text-center">集金</th>
                       <th className="border border-gray-200 px-2 py-1.5"></th>
+                      <th className="border border-gray-200 bg-blue-50 px-2 py-1.5 text-right text-blue-800">まとめ合計</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -948,7 +949,7 @@ export default function StaffPurchasesPage() {
                     {group.rows.map((row, rowIndex) => {
                       const editing = editingId === row.id
                       const showLead = !multi || rowIndex === 0
-                      const leadSpan = multi ? group.rows.length + 1 : undefined
+                      const leadSpan = multi ? group.rows.length : undefined
                       if (row.kind === 'legacy') {
                         return (
                           <tr key={row.id} className="bg-gray-50/60">
@@ -998,6 +999,7 @@ export default function StaffPurchasesPage() {
                                 <button onClick={() => startEdit(row)} className="rounded bg-gray-100 px-2 py-1 text-gray-600">修正</button>
                               )}
                             </td>
+                            <td className="border border-gray-200"></td>
                           </tr>
                         )
                       }
@@ -1061,26 +1063,21 @@ export default function StaffPurchasesPage() {
                               <button onClick={() => startEdit(row)} className="rounded bg-gray-100 px-2 py-1 text-gray-600">修正</button>
                             )}
                           </td>
+                          {!multi && <td className="border border-gray-200"></td>}
+                          {multi && rowIndex === 0 && (
+                            <td rowSpan={group.rows.length} className="border border-gray-200 bg-blue-50 px-3 py-1.5 text-right align-middle">
+                              <span className="block text-[11px] text-blue-700">{group.rows.length}点・{groupQty}個</span>
+                              <span className="block text-base font-bold text-blue-900">{yen(groupTotal)}</span>
+                              <label className="mt-1 flex items-center justify-end gap-1 text-[11px] text-blue-800" title="この塊の商品を全部まとめて集金済み（外す）にします">
+                                <input type="checkbox" checked={groupCollected} disabled={groupHanded && groupCollected}
+                                  onChange={(event) => void setCollectedFor(group.rows.map((item) => item.id), event.target.checked)} className="h-4 w-4" />
+                                まとめて集金
+                              </label>
+                            </td>
+                          )}
                         </tr>
                       )
                     })}
-                    {multi && (
-                      <tr className="bg-blue-50">
-                        <td className="border border-gray-200"></td>
-                        <td colSpan={2} className="border border-gray-200 px-2 py-1.5 text-right text-xs font-bold text-blue-800">合計 {group.rows.length}点</td>
-                        <td className="border border-gray-200 px-2 py-1.5 text-right font-bold text-blue-900">{groupQty}</td>
-                        <td className="border border-gray-200"></td>
-                        <td className="border border-gray-200 px-2 py-1.5 text-right text-base font-bold text-blue-900">{yen(groupTotal)}</td>
-                        <td className="border border-gray-200 px-2 py-1.5 text-center">
-                          <label className="flex items-center justify-center gap-1 text-xs text-blue-800" title="この塊の商品を全部まとめて集金済み（外す）にします">
-                            <input type="checkbox" checked={groupCollected} disabled={groupHanded && groupCollected}
-                              onChange={(event) => void setCollectedFor(group.rows.map((item) => item.id), event.target.checked)} className="h-4 w-4" />
-                            まとめて
-                          </label>
-                        </td>
-                        <td className="border border-gray-200"></td>
-                      </tr>
-                    )}
                     </Fragment>
                       )
                     })}
