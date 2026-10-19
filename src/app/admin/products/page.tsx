@@ -127,14 +127,20 @@ export default function ProductManagementPage() {
     })
   }
 
+  // 同じブランド＋商品名の取扱中の商品を探す（停止中の商品とはかぶってもよい）
+  function activeDuplicate(brandText: string, nameText: string, exceptId?: number) {
+    const key = normalizeSearch(`${brandText.trim()}${nameText.trim()}`)
+    return products.find((item) => item.id !== exceptId && item.is_active && normalizeSearch(`${item.brand ?? ''}${item.name}`) === key)
+  }
+
   async function addProduct() {
     if (!categoryId || !name.trim() || selectedStores.size === 0) {
       setError('カテゴリ・商品名・取扱店舗を確認してください。')
       return
     }
-    const duplicateKey = normalizeSearch(`${brand}${name}`)
-    if (products.some((product) => normalizeSearch(`${product.brand ?? ''}${product.name}`) === duplicateKey)) {
-      setError('同じブランド・商品名がすでに登録されています。既存商品を確認してください。')
+    const duplicate = activeDuplicate(brand, name)
+    if (duplicate) {
+      setError(`取扱中の「${duplicate.brand ? `${duplicate.brand} ` : ''}${duplicate.name}」と同じブランド・商品名です。既存の商品を確認してください。`)
       return
     }
     setSaving(true)
@@ -227,9 +233,9 @@ export default function ProductManagementPage() {
       setError('商品名を入力してください。')
       return
     }
-    const duplicateKey = normalizeSearch(`${editBrand.trim()}${trimmedName}`)
-    if (products.some((item) => item.id !== product.id && normalizeSearch(`${item.brand ?? ''}${item.name}`) === duplicateKey)) {
-      setError('同じブランド・商品名の商品がすでにあります。')
+    const duplicate = activeDuplicate(editBrand, trimmedName, product.id)
+    if (duplicate) {
+      setError(`取扱中の「${duplicate.brand ? `${duplicate.brand} ` : ''}${duplicate.name}」と同じブランド・商品名になります。重複しているなら「重複した商品を統合」を使ってください。`)
       return
     }
     setSaving(true)
