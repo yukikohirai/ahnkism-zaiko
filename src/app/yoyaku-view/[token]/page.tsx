@@ -180,7 +180,7 @@ export default function PresaleViewPage() {
               return (
                 <li key={order.id} className={`py-2.5 ${cancelled ? 'opacity-50' : ''}`}>
                   <div className="flex flex-wrap items-baseline justify-between gap-2">
-                    <span className={`font-bold text-gray-800 ${cancelled ? 'line-through' : ''}`}>{order.customer_name} 様</span>
+                    <span className={`font-bold text-gray-800 ${cancelled ? 'line-through' : ''}`}>{order.customer_name.replace(/\s*様$/, '')} 様</span>
                     <span className="text-sm font-bold text-pink-700">{yen(order.total_amount)}</span>
                   </div>
                   <div className="text-xs text-gray-500">

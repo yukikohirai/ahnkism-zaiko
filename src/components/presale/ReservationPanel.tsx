@@ -488,7 +488,7 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
                     ・担当 {staffMap.get(order.stylist_id ?? 0)?.name ?? '−'}・お勧め {staffMap.get(order.staff_id ?? 0)?.name ?? '−'}
                   </div>
                   <div className={`font-bold text-gray-800 ${cancelled ? 'line-through' : ''}`}>
-                    {order.customer_name} 様
+                    {order.customer_name.replace(/\s*様$/, '')} 様
                     {order.applied_percent !== null && <span className="ml-2 rounded bg-pink-100 px-1.5 py-0.5 text-[10px] text-pink-700">まとめ買い{Number(order.applied_percent)}%</span>}
                   </div>
                   {order.note && <p className="mt-0.5 whitespace-pre-wrap rounded-md bg-yellow-50 px-2 py-1 text-xs text-yellow-900">メモ：{order.note}</p>}
