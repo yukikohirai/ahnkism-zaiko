@@ -451,13 +451,13 @@ export default function OperationsPage() {
           <div className="mt-2 max-h-[60dvh] overflow-y-auto rounded-xl border border-gray-100">
             {productGroups.map((group) => (
               <div key={group.category.id}>
-                <div className="border-b border-gray-100 bg-slate-50 px-3 py-1.5 text-xs font-bold text-gray-600">{group.category.name}</div>
+                <div className="sticky top-0 z-[1] border-b border-gray-100 bg-slate-50 px-3 py-1 text-xs font-bold text-gray-600">{group.category.name}</div>
                 {group.items.map((item) => {
                   const itemStock = stockMap.get(`${item.store_id}_${item.product_id}`) ?? 0
                   return (
                     <button key={`${item.store_id}_${item.product_id}`} onClick={() => selectProduct(item)}
-                      className={`flex w-full items-center justify-between border-b border-gray-100 px-3 py-2 text-left last:border-0 ${productId === item.product_id ? 'bg-blue-50' : 'bg-white'}`}>
-                      <span><span className="block text-[10px] text-gray-400">{item.product.brand}</span><span className="text-sm font-medium text-gray-700">{item.product.name}</span></span>
+                      className={`flex w-full items-center justify-between border-b border-gray-100 px-3 py-1 text-left leading-snug last:border-0 ${productId === item.product_id ? 'bg-blue-50' : 'bg-white'}`}>
+                      <span className="min-w-0">{item.product.brand && <span className="mr-1.5 text-[11px] text-gray-400">{item.product.brand}</span>}<span className="text-sm font-medium text-gray-700">{item.product.name}</span></span>
                       <span className={`ml-3 shrink-0 text-xs ${itemStock < 0 ? 'font-bold text-red-600' : 'text-gray-500'}`}>在庫 {itemStock}</span>
                     </button>
                   )
@@ -534,7 +534,7 @@ export default function OperationsPage() {
           {historyError && <p className="mb-2 rounded-xl bg-red-50 px-3 py-2 text-sm text-red-600">{historyError}</p>}
           <div className="divide-y divide-gray-100">
             {recent.map((item) => (
-              <div key={item.id} className="py-2.5 text-sm">
+              <div key={item.id} className="py-1.5 text-sm leading-snug">
                 <div className="flex items-center justify-between gap-3">
                   <div className="min-w-0">
                     <div className="text-xs text-gray-400">
