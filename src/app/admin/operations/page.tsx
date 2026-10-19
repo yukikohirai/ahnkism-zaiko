@@ -105,8 +105,8 @@ export default function OperationsPage() {
   const [fromStoreId, setFromStoreId] = useState<number | null>(null)
   const [toStoreId, setToStoreId] = useState<number | null>(null)
   const [productId, setProductId] = useState<number | null>(null)
-  // 数量は空欄から入力する（最初から「1」を入れない）。スマホでも押しやすいよう −／＋ ボタンも付ける
-  const [quantityText, setQuantityText] = useState('')
+  // 数量は最初「1」。欄を押すと全部選ばれるので、そのまま打てば置き換わる。スマホでも押しやすいよう −／＋ ボタンも付ける
+  const [quantityText, setQuantityText] = useState('1')
   const quantity = Number.parseInt(quantityText.normalize('NFKC'), 10) || 0
   const stepQuantity = (delta: number) => setQuantityText(String(Math.max(1, quantity + delta)))
   const [actualStock, setActualStock] = useState('')
@@ -275,7 +275,7 @@ export default function OperationsPage() {
     setHistoryMessage('履歴を取り消し、在庫を計算し直しました。')
     await Promise.all([loadHistory(), loadData()])
   }
-  useEffect(() => { setProductId(null); setSearch(''); setMessage(''); setError(''); setActualStock('') }, [mode, storeId, fromStoreId, toStoreId])
+  useEffect(() => { setProductId(null); setSearch(''); setMessage(''); setError(''); setActualStock(''); setQuantityText('1') }, [mode, storeId, fromStoreId, toStoreId])
 
   const stockMap = useMemo(() => new Map(stockRows.map((row) => [`${row.store_id}_${row.product_id}`, row.current_stock])), [stockRows])
   // 店舗入力画面と同じ並び（カテゴリの sort_order → 店舗ごとの store_products.sort_order）で全件出す。
@@ -318,6 +318,7 @@ export default function OperationsPage() {
 
   function selectProduct(item: AssignedProduct) {
     setProductId(item.product_id)
+    setQuantityText('1')
     if (mode === 'adjustment') {
       setActualStock(String(stockMap.get(`${item.store_id}_${item.product_id}`) ?? 0))
     }
@@ -378,7 +379,7 @@ export default function OperationsPage() {
     setSaving(false)
     // 同じ検索語で続けて登録することが多いので、検索はそのまま残す
     setProductId(null)
-    setQuantityText('')
+    setQuantityText('1')
     setActualStock('')
     await Promise.all([loadData(), loadHistory()])
   }
@@ -480,13 +481,14 @@ export default function OperationsPage() {
 
           {mode === 'adjustment' ? (
             <label className="mt-3 block text-xs font-medium text-gray-500">実際の在庫数
-              <input type="number" min="0" step="1" value={actualStock} onChange={(event) => setActualStock(event.target.value)} placeholder="数えた在庫数" className="mt-1 block w-full rounded-xl border border-gray-200 px-3 py-3 text-center text-lg font-bold" />
+              <input type="number" min="0" step="1" value={actualStock} onFocus={(event) => { const input = event.currentTarget; window.setTimeout(() => input.select(), 0) }} onChange={(event) => setActualStock(event.target.value)} placeholder="数えた在庫数" className="mt-1 block w-full rounded-xl border border-gray-200 px-3 py-3 text-center text-lg font-bold" />
             </label>
           ) : (
             <label className="mt-3 block text-xs font-medium text-gray-500">数量
               <div className="mt-1 flex items-stretch gap-2">
                 <button type="button" onClick={() => stepQuantity(-1)} aria-label="1減らす" className="w-14 shrink-0 rounded-xl border border-gray-300 bg-gray-50 text-2xl font-bold text-gray-700 active:bg-gray-200">−</button>
                 <input type="text" inputMode="numeric" value={quantityText} placeholder="数を入力"
+                  onFocus={(event) => { const input = event.currentTarget; window.setTimeout(() => input.select(), 0) }}
                   onChange={(event) => setQuantityText(event.target.value.normalize('NFKC').replace(/[^0-9]/g, ''))}
                   className="block w-full rounded-xl border border-gray-200 px-3 py-3 text-center text-lg font-bold" />
                 <button type="button" onClick={() => stepQuantity(1)} aria-label="1増やす" className="w-14 shrink-0 rounded-xl border border-gray-300 bg-gray-50 text-2xl font-bold text-gray-700 active:bg-gray-200">＋</button>
