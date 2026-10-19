@@ -1004,7 +1004,7 @@ export default function StaffPurchasesPage() {
                         )
                       }
                       return (
-                        <tr key={row.id} className={`${row.collected_on ? '' : 'bg-amber-50/40'} ${multi && rowIndex === 0 ? 'border-t-2 border-t-blue-300' : ''}`}>
+                        <tr key={row.id} className={row.collected_on ? '' : 'bg-amber-50/40'}>
                           <td className="border border-gray-200 px-1 py-1.5 text-center">
                             {canHand(row) && <input type="checkbox" checked={handSelection.has(row.id)} onChange={() => toggleHand(row.id)} className="h-4 w-4" aria-label="ディーラーに渡す行として選ぶ" />}
                           </td>
