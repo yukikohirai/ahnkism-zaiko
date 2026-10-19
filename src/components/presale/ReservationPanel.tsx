@@ -281,7 +281,8 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
           count: mine.length,
         }
       })
-      .filter((row) => row.person.is_active || row.count > 0)
+      // 目標を入れたスタッフだけ出す（本部の人など、目標のない人は出さない。お勧めした予約は店舗の合計には入る）
+      .filter((row) => row.goal > 0)
   }, [filterStore, goals, helpOrders, orders, staff, storeId, stores])
 
   return (

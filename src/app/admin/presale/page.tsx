@@ -677,15 +677,20 @@ function StaffRoster({ stores, campaign }: { stores: Store[]; campaign: PresaleC
 // 店舗スタッフ用の予約ページ（URL＋暗証番号）
 function StoreAccess({ stores }: { stores: Store[] }) {
   const [rows, setRows] = useState<{ store_id: number; url_token: string; pin_hash: string | null }[]>([])
+  const [viewToken, setViewToken] = useState('')
   const [pins, setPins] = useState<Record<number, string>>({})
   const [message, setMessage] = useState('')
   const [error, setError] = useState('')
   const origin = typeof window === 'undefined' ? '' : window.location.origin
 
   const load = useCallback(async () => {
-    const { data, error: loadError } = await supabase.from('presale_store_access').select('store_id, url_token, pin_hash')
-    if (loadError) setError('読み込めませんでした。')
+    const [{ data, error: loadError }, viewResult] = await Promise.all([
+      supabase.from('presale_store_access').select('store_id, url_token, pin_hash'),
+      supabase.from('presale_view_access').select('url_token').maybeSingle(),
+    ])
+    if (loadError || viewResult.error) setError('読み込めませんでした。')
     setRows((data ?? []) as typeof rows)
+    setViewToken((viewResult.data?.url_token as string | undefined) ?? '')
   }, [])
 
   useEffect(() => { void load() }, [load])
@@ -709,6 +714,14 @@ function StoreAccess({ stores }: { stores: Store[] }) {
     await load()
   }
 
+  async function resetViewUrl() {
+    if (!confirm('「見るだけ」ページのURLを作り直します。今のURLは使えなくなり、新しいURLをスタッフに伝え直す必要があります。よろしいですか？')) return
+    const { error: resetError } = await supabase.rpc('reset_presale_view_url')
+    if (resetError) { setError(resetError.message); return }
+    setMessage('「見るだけ」ページのURLを作り直しました。')
+    await load()
+  }
+
   async function copy(text: string) {
     try {
       await navigator.clipboard.writeText(text)
@@ -726,6 +739,18 @@ function StoreAccess({ stores }: { stores: Store[] }) {
       </p>
       {message && <p className="mb-2 rounded-lg bg-green-50 px-3 py-2 text-sm text-green-700">{message}</p>}
       {error && <p className="mb-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}
+      <div className="mb-4 rounded-xl border border-pink-200 bg-pink-50/50 p-3">
+        <p className="font-bold text-gray-800">見るだけのページ（スタッフ全員用）</p>
+        <p className="mt-0.5 text-xs text-gray-500">URLだけで開けます（暗証番号なし）。予約の入力・修正はできません。企画を選んで、店舗ごとの「スタッフの目標と予約金額」と「予約一覧（お勧めした人で絞り込み）」が見られます。新しい企画も自動で選べるようになるので、URLは毎回同じです。</p>
+        {viewToken && (
+          <div className="mt-2 flex flex-wrap items-center gap-2">
+            <code className="min-w-0 flex-1 break-all rounded-lg bg-white px-2 py-1.5 text-xs text-gray-700">{`${origin}/yoyaku-view/${viewToken}`}</code>
+            <button onClick={() => void copy(`${origin}/yoyaku-view/${viewToken}`)} className="shrink-0 rounded-lg bg-blue-50 px-3 py-1.5 text-xs font-bold text-blue-700">コピー</button>
+            <button onClick={() => void resetViewUrl()} className="shrink-0 rounded-lg bg-gray-100 px-3 py-1.5 text-xs text-gray-600">URLを作り直す</button>
+          </div>
+        )}
+      </div>
+      <p className="mb-1 text-sm font-bold text-gray-800">入力用のページ（店舗の代表用・暗証番号つき）</p>
       <div className="divide-y divide-gray-100">
         {stores.map((store) => {
           const row = rows.find((item) => item.store_id === store.id)
