@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation'
 import { getCurrentProfile } from '@/lib/auth'
 import { supabase } from '@/lib/supabase'
 import { fetchAll } from '@/lib/fetchAll'
+import NumericInput from '@/components/NumericInput'
 import { withTax, yen } from '@/lib/tax'
 import { todayInTokyo } from '@/lib/presale'
 import RosterManager from './RosterManager'
@@ -778,7 +779,7 @@ export default function StaffPurchasesPage() {
               </div>
               <div className="mt-2 grid grid-cols-3 gap-2">
                 <label className="text-xs text-gray-500">数
-                  <input value={quantity} onChange={(event) => setQuantity(event.target.value.normalize('NFKC').replace(/[^0-9]/g, ''))} inputMode="numeric" placeholder="数"
+                  <NumericInput value={quantity} onChange={setQuantity} selectOnFocus placeholder="数" ariaLabel="数"
                     className="mt-1 block w-full rounded-lg border border-gray-200 px-2 py-2 text-right text-base" />
                 </label>
                 <label className="text-xs text-gray-500">単価（税込）

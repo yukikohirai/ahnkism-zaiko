@@ -6,6 +6,7 @@ import { useRouter } from 'next/navigation'
 import { getCurrentProfile } from '@/lib/auth'
 import { supabase } from '@/lib/supabase'
 import { fetchAll } from '@/lib/fetchAll'
+import NumericInput from '@/components/NumericInput'
 
 type Mode = 'receipt' | 'transfer' | 'reduction' | 'adjustment'
 type Store = { id: number; name: string }
@@ -487,9 +488,7 @@ export default function OperationsPage() {
             <label className="mt-3 block text-xs font-medium text-gray-500">数量
               <div className="mt-1 flex items-stretch gap-2">
                 <button type="button" onClick={() => stepQuantity(-1)} aria-label="1減らす" className="w-14 shrink-0 rounded-xl border border-gray-300 bg-gray-50 text-2xl font-bold text-gray-700 active:bg-gray-200">−</button>
-                <input type="text" inputMode="numeric" value={quantityText} placeholder="数を入力"
-                  onFocus={(event) => { const input = event.currentTarget; window.setTimeout(() => input.select(), 0) }}
-                  onChange={(event) => setQuantityText(event.target.value.normalize('NFKC').replace(/[^0-9]/g, ''))}
+                <NumericInput value={quantityText} onChange={setQuantityText} selectOnFocus placeholder="数を入力" ariaLabel="数量"
                   className="block w-full rounded-xl border border-gray-200 px-3 py-3 text-center text-lg font-bold" />
                 <button type="button" onClick={() => stepQuantity(1)} aria-label="1増やす" className="w-14 shrink-0 rounded-xl border border-gray-300 bg-gray-50 text-2xl font-bold text-gray-700 active:bg-gray-200">＋</button>
               </div>
