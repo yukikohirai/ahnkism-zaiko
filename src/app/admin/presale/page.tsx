@@ -536,7 +536,8 @@ function StockSummary({ campaign, stores }: { campaign: PresaleCampaign; stores:
                     const key = `${store.id}_${item.product_id}`
                     const reserved = reservedMap.get(key) ?? { reserved: 0, delivered: 0 }
                     const allocated = allocations.get(key) ?? 0
-                    const remaining = allocated - reserved.delivered
+                    // 先行分の残りは「まだ渡していない予約の数」までにする（当日キャンセルした分は自動で取り置きから外れる）
+                    const remaining = Math.min(allocated - reserved.delivered, reserved.reserved - reserved.delivered)
                     const current = stock.get(key)
                     const normal = current === undefined ? null : current - Math.max(0, remaining)
                     return (

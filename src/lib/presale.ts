@@ -40,6 +40,8 @@ export type OrderLine = {
   line_discount_value?: number | null
   // 発注が必要（店舗の在庫を取り分けるだけで済まない）
   needs_order?: boolean
+  // お渡しで数を変えたときの、もとの予約数（変えていなければ null）
+  reserved_qty?: number | null
 }
 
 export type PresaleOrder = {

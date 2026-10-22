@@ -107,21 +107,29 @@ export default function OrdersPage() {
     const campaignIds = (activeCampaigns ?? []).map((row) => row.id as number)
     const held = new Map<string, number>()
     if (campaignIds.length > 0) {
-      const [allocationResult, deliveredResult] = await Promise.all([
+      const [allocationResult, lineResult] = await Promise.all([
         supabase.from('presale_allocations').select('store_id, product_id, allocated_qty').in('campaign_id', campaignIds),
         fetchAll((start, end) => supabase.from('presale_order_lines')
-          .select('product_id, quantity, presale_orders!inner(store_id, campaign_id, delivered_at, cancelled_at)')
-          .in('presale_orders.campaign_id', campaignIds).not('presale_orders.delivered_at', 'is', null)
+          .select('id, product_id, quantity, presale_orders!inner(store_id, campaign_id, delivered_at, cancelled_at)')
+          .in('presale_orders.campaign_id', campaignIds)
           .is('presale_orders.cancelled_at', null).order('id').range(start, end)),
       ])
+      // 確保中 ＝ 先行分 − お渡し済み。ただし、まだ渡していない予約の数まで（当日キャンセル分は外れる）
+      const allocated = new Map<string, number>()
+      const delivered = new Map<string, number>()
+      const open = new Map<string, number>()
       ;(allocationResult.data ?? []).forEach((row) => {
         const key = `${row.store_id}_${row.product_id}`
-        held.set(key, (held.get(key) ?? 0) + row.allocated_qty)
+        allocated.set(key, (allocated.get(key) ?? 0) + row.allocated_qty)
       })
-      ;(deliveredResult.data ?? []).forEach((row) => {
+      ;(lineResult.data ?? []).forEach((row) => {
         const order = Array.isArray(row.presale_orders) ? row.presale_orders[0] : row.presale_orders
         const key = `${order.store_id}_${row.product_id}`
-        held.set(key, (held.get(key) ?? 0) - row.quantity)
+        const target = order.delivered_at ? delivered : open
+        target.set(key, (target.get(key) ?? 0) + row.quantity)
+      })
+      allocated.forEach((value, key) => {
+        held.set(key, Math.max(0, Math.min(value - (delivered.get(key) ?? 0), open.get(key) ?? 0)))
       })
     }
     setPresaleHeld(held)

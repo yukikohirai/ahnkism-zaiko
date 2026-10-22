@@ -22,7 +22,7 @@ type Order = {
   delivered_at: string | null
   cancelled_at: string | null
   note: string | null
-  lines: { product_id: number; quantity: number }[]
+  lines: { product_id: number; quantity: number; reserved_qty?: number | null }[]
 }
 type ViewData = { campaigns: Campaign[]; stores: Store[]; staff: Staff[]; goals: Goal[]; products: Product[]; orders: Order[] }
 
@@ -191,7 +191,14 @@ export default function PresaleViewPage() {
                   <ul className="mt-0.5 text-sm text-gray-700">
                     {order.lines.map((line, index) => {
                       const product = productMap.get(line.product_id)
-                      return <li key={index} className="break-words">{product ? `${product.brand ? `${product.brand} ` : ''}${product.name}` : '商品'} × {line.quantity}</li>
+                      return (
+                        <li key={index} className="break-words">
+                          {product ? `${product.brand ? `${product.brand} ` : ''}${product.name}` : '商品'}
+                          {line.reserved_qty != null && line.reserved_qty !== line.quantity
+                            ? <span className="ml-1">予約{line.reserved_qty} → お渡し{line.quantity}（{line.reserved_qty - line.quantity}個キャンセル）</span>
+                            : <> × {line.quantity}</>}
+                        </li>
+                      )
                     })}
                   </ul>
                 </li>

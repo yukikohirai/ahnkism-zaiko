@@ -67,6 +67,8 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
   const [helpOrders, setHelpOrders] = useState<HelpOrder[]>([])
   const [showHelp, setShowHelp] = useState(false)
   const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([])
+  // お渡しの確認画面（渡す数）
+  const [deliverTarget, setDeliverTarget] = useState<{ order: PresaleOrder; quantities: Record<string, string> } | null>(null)
   const [goals, setGoals] = useState<StaffGoal[]>([])
   const [orders, setOrders] = useState<PresaleOrder[]>([])
   // 店舗ごとの商品の並び（本部が設定）。設定していない商品は後ろに名前順
@@ -244,14 +246,39 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
     }))
   }
 
+  // お渡し：渡す数を確認する画面を出す（予約3 → 渡す2 のように変えられる）。取り消しはそのまま
   async function toggleDelivered(order: PresaleOrder) {
-    const next = !order.delivered_at
-    if (!next && !confirm('お渡し済みを取り消します。在庫も元に戻ります。よろしいですか？')) return
+    if (!order.delivered_at) {
+      setDeliverTarget({ order, quantities: Object.fromEntries(order.lines.filter((line) => line.id).map((line) => [line.id!, String(line.quantity)])) })
+      setError('')
+      return
+    }
+    if (!confirm('お渡し済みを取り消します。在庫も元に戻り、渡す数を変えていた場合は予約の数と金額に戻ります。よろしいですか？')) return
     setBusyId(order.id)
     setError('')
-    const { error: rpcError } = await supabase.rpc('set_presale_order_delivered', { p_store_id: order.store_id, ...rpcAccess, p_order_id: order.id, p_delivered: next })
+    const { error: rpcError } = await supabase.rpc('set_presale_order_delivered', { p_store_id: order.store_id, ...rpcAccess, p_order_id: order.id, p_delivered: false })
     setBusyId('')
     if (rpcError) { setError(rpcError.message); return }
+    await load()
+  }
+
+  async function confirmDeliver() {
+    if (!deliverTarget) return
+    const { order, quantities } = deliverTarget
+    const parsed: Record<string, number> = {}
+    for (const line of order.lines) {
+      if (!line.id) continue
+      const value = Number.parseInt((quantities[line.id] ?? '').normalize('NFKC'), 10)
+      if (!Number.isInteger(value) || value < 0 || value > line.quantity) { setError(`渡す数は0〜${line.quantity}の間で入れてください。`); return }
+      parsed[line.id] = value
+    }
+    if (Object.values(parsed).every((value) => value === 0)) { setError('渡す数がすべて0です。渡さない場合は予約をキャンセルにしてください。'); return }
+    setBusyId(order.id)
+    setError('')
+    const { error: rpcError } = await supabase.rpc('set_presale_order_delivered', { p_store_id: order.store_id, ...rpcAccess, p_order_id: order.id, p_delivered: true, p_quantities: parsed })
+    setBusyId('')
+    if (rpcError) { setError(rpcError.message); return }
+    setDeliverTarget(null)
     await load()
   }
 
@@ -311,8 +338,38 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
       .filter((row) => row.goal > 0)
   }, [filterStore, goals, helpOrders, orders, staff, storeId, stores])
 
+  const deliverModal = deliverTarget && (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={() => setDeliverTarget(null)}>
+      <div className="w-full max-w-md rounded-2xl bg-white p-4 shadow-xl" onClick={(event) => event.stopPropagation()}>
+        <p className="font-bold text-gray-800">{deliverTarget.order.customer_name.replace(/\s*様$/, '')} 様にお渡し</p>
+        <p className="mt-0.5 text-xs text-gray-500">渡す数を確認してください。減らした分はキャンセルになり、在庫は渡した数だけ減ります。金額も渡した数で計算し直します。</p>
+        {error && <p className="mt-2 rounded-lg bg-red-50 px-3 py-2 text-sm text-red-600">{error}</p>}
+        <ul className="mt-3 divide-y divide-gray-100">
+          {deliverTarget.order.lines.filter((line) => line.id).map((line) => {
+            const item = itemMap.get(line.product_id)
+            return (
+              <li key={line.id} className="flex items-center gap-2 py-2 text-sm">
+                <span className="min-w-0 flex-1 break-words">{item ? `${item.brand ? `${item.brand} ` : ''}${item.name}` : '商品'}</span>
+                <span className="shrink-0 text-xs text-gray-500">予約{line.quantity} → 渡す</span>
+                <input inputMode="numeric" value={deliverTarget.quantities[line.id!] ?? ''}
+                  onFocus={(event) => { const input = event.currentTarget; window.setTimeout(() => input.select(), 0) }}
+                  onChange={(event) => setDeliverTarget((previous) => previous && { ...previous, quantities: { ...previous.quantities, [line.id!]: event.target.value } })}
+                  className="w-14 shrink-0 rounded-lg border border-gray-300 px-2 py-1.5 text-center text-base font-bold" />
+              </li>
+            )
+          })}
+        </ul>
+        <div className="mt-3 flex gap-2">
+          <button onClick={() => setDeliverTarget(null)} className="flex-1 rounded-xl border border-gray-200 py-2.5 text-sm text-gray-600">やめる</button>
+          <button onClick={() => void confirmDeliver()} disabled={busyId === deliverTarget.order.id} className="flex-1 rounded-xl bg-green-600 py-2.5 text-sm font-bold text-white disabled:bg-gray-300">お渡し済みにする</button>
+        </div>
+      </div>
+    </div>
+  )
+
   return (
     <div className="space-y-4">
+      {deliverModal}
       <section className={`rounded-2xl border bg-white p-4 shadow-sm ${draft.id ? 'border-amber-300' : 'border-gray-200'}`}>
         <h2 className="mb-1 font-bold text-gray-800">{draft.id ? '予約を修正' : '予約を登録'}</h2>
         {sortedTiers.length > 0 && (
@@ -540,7 +597,10 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
                             </label>
                           )}
                           <span className="min-w-0">
-                          {item ? `${item.brand ? `${item.brand} ` : ''}${item.name}` : '（対象外になった商品）'} × {line.quantity}
+                          {item ? `${item.brand ? `${item.brand} ` : ''}${item.name}` : '（対象外になった商品）'}
+                          {line.reserved_qty != null && line.reserved_qty !== line.quantity
+                            ? <span className="ml-1">予約{line.reserved_qty} → お渡し{line.quantity}<span className="ml-1 rounded bg-gray-200 px-1 text-[10px] text-gray-700">{line.reserved_qty - line.quantity}個キャンセル</span></span>
+                            : <> × {line.quantity}</>}
                           <span className="ml-1 text-xs text-gray-500">{yen(line.unit_price)}</span>
                           {line.line_discount_type && <span className="ml-1 rounded bg-amber-100 px-1 text-[10px] text-amber-700">個別{discountLabel(line.line_discount_type, Number(line.line_discount_value ?? 0))}</span>}
                           </span>
