@@ -8,6 +8,7 @@ import { supabase } from '@/lib/supabase'
 import { fetchAll } from '@/lib/fetchAll'
 import { withTax, withoutTax, yen } from '@/lib/tax'
 import BrandCostSearch from '@/components/report/BrandCostSearch'
+import OtherExpenses from '@/components/report/OtherExpenses'
 
 type Store = { id: number; name: string }
 type ReportProduct = {
@@ -392,6 +393,11 @@ export default function ReportPage() {
             )
           })()}
         </section>
+
+        {!loading && (
+          <OtherExpenses stores={stores} from={from} to={to} taxIncluded={taxIncluded} sales={sales}
+            materialByStore={new Map(stores.map((store) => [store.id, byStore.get(store.id)?.material ?? 0]))} />
+        )}
 
         {!loading && (
           <BrandCostSearch stores={stores} products={products} taxIncluded={taxIncluded} defaultFrom={from} defaultTo={to} />
