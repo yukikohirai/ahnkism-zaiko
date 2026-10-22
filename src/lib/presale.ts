@@ -38,6 +38,8 @@ export type OrderLine = {
   unit_price: number | null
   line_discount_type?: DiscountType | null
   line_discount_value?: number | null
+  // 発注が必要（店舗の在庫を取り分けるだけで済まない）
+  needs_order?: boolean
 }
 
 export type PresaleOrder = {

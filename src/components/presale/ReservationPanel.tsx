@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { Fragment, useCallback, useEffect, useMemo, useState } from 'react'
 import { supabase } from '@/lib/supabase'
 import { fetchAll } from '@/lib/fetchAll'
 import { yen } from '@/lib/tax'
@@ -10,7 +10,7 @@ import {
 } from '@/lib/presale'
 
 type Store = { id: number; name: string }
-type DraftLine = { product_id: string; quantity: string; discount_type: '' | 'percent' | 'yen'; discount_value: string }
+type DraftLine = { product_id: string; quantity: string; discount_type: '' | 'percent' | 'yen'; discount_value: string; needs_order?: boolean }
 type Draft = {
   id: string | null
   store_id: number | null
@@ -40,7 +40,11 @@ type PortalData = {
   item_sort?: ItemSort[]
   other_staff?: (Staff & { store_name: string })[]
   help_orders?: HelpOrder[]
+  checkpoints?: Checkpoint[]
 }
+
+// 発注済みの区切り（店舗ごと）。この時刻より後に登録された予約が次の発注リストに入る
+export type Checkpoint = { id: string; campaign_id: number; store_id: number; note: string; created_at: string }
 
 // この店舗のスタッフが、ヘルプ先の他店で取った予約（目標の実績に入れる）
 type HelpOrder = Pick<PresaleOrder, 'id' | 'campaign_id' | 'store_id' | 'staff_id' | 'total_amount' | 'delivered_at' | 'cancelled_at'>
@@ -62,6 +66,7 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
   const [otherStaff, setOtherStaff] = useState<(Staff & { store_name?: string })[]>([])
   const [helpOrders, setHelpOrders] = useState<HelpOrder[]>([])
   const [showHelp, setShowHelp] = useState(false)
+  const [checkpoints, setCheckpoints] = useState<Checkpoint[]>([])
   const [goals, setGoals] = useState<StaffGoal[]>([])
   const [orders, setOrders] = useState<PresaleOrder[]>([])
   // 店舗ごとの商品の並び（本部が設定）。設定していない商品は後ろに名前順
@@ -87,12 +92,13 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
       setStaff(portal.staff)
       setOtherStaff(portal.other_staff ?? [])
       setHelpOrders((portal.help_orders ?? []).filter((order) => order.campaign_id === campaign.id))
+      setCheckpoints((portal.checkpoints ?? []).filter((point) => point.campaign_id === campaign.id))
       setGoals(portal.goals.filter((goal) => goal.campaign_id === campaign.id))
       setOrders(portal.orders.filter((order) => order.campaign_id === campaign.id))
       setItemSort(portal.item_sort ?? [])
       return
     }
-    const [itemResult, tierResult, staffResult, goalResult, orderResult, lineResult, sortResult] = await Promise.all([
+    const [itemResult, tierResult, staffResult, goalResult, orderResult, lineResult, sortResult, checkpointResult] = await Promise.all([
       supabase.from('presale_items').select('*, product:products!inner(brand, name, sale_price)').eq('campaign_id', campaign.id),
       supabase.from('presale_bulk_tiers').select('*').eq('campaign_id', campaign.id),
       supabase.from('staff').select('*').order('sort_order').order('id'),
@@ -101,6 +107,7 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
       fetchAll((start, end) => supabase.from('presale_order_lines').select('*, presale_orders!inner(campaign_id)')
         .eq('presale_orders.campaign_id', campaign.id).order('id').range(start, end)),
       supabase.from('presale_store_item_sort').select('store_id, product_id, sort_order'),
+      supabase.from('presale_order_checkpoints').select('id, campaign_id, store_id, note, created_at').eq('campaign_id', campaign.id).order('created_at'),
     ])
     if (itemResult.error || tierResult.error || staffResult.error || goalResult.error || orderResult.error || lineResult.error) {
       setError('データを読み込めませんでした。')
@@ -111,6 +118,7 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
     }))
     setTiers((tierResult.data ?? []) as BulkTier[])
     setItemSort((sortResult.data ?? []) as ItemSort[])
+    setCheckpoints((checkpointResult.data ?? []) as Checkpoint[])
     setStaff((staffResult.data ?? []) as Staff[])
     setGoals((goalResult.data ?? []) as StaffGoal[])
     const linesByOrder = new Map<string, PresaleOrder['lines']>()
@@ -162,6 +170,7 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
       quantity: parseInt(line.quantity, 10),
       discount_type: line.discount_type || null,
       discount_value: line.discount_type ? Number(line.discount_value || 0) : null,
+      needs_order: line.needs_order ?? false,
     }))
   const estimate = priceOrder(draftLines, itemMap, tiers)
   const sortedTiers = [...tiers].sort((a, b) => a.min_qty - b.min_qty)
@@ -185,6 +194,7 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
         quantity: String(line.quantity),
         discount_type: line.line_discount_type ?? '',
         discount_value: line.line_discount_value != null ? String(line.line_discount_value) : '',
+        needs_order: line.needs_order ?? false,
       })),
     })
     setMessage('')
@@ -224,6 +234,16 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
     await load()
   }
 
+  // 「発注が必要」の付け外し
+  async function toggleNeedsOrder(order: PresaleOrder, lineId: string, value: boolean) {
+    setError('')
+    const { error: rpcError } = await supabase.rpc('set_presale_line_needs_order', { p_store_id: order.store_id, ...rpcAccess, p_line_id: lineId, p_value: value })
+    if (rpcError) { setError(rpcError.message); return }
+    setOrders((previous) => previous.map((item) => item.id !== order.id ? item : {
+      ...item, lines: item.lines.map((line) => line.id === lineId ? { ...line, needs_order: value } : line),
+    }))
+  }
+
   async function toggleDelivered(order: PresaleOrder) {
     const next = !order.delivered_at
     if (!next && !confirm('お渡し済みを取り消します。在庫も元に戻ります。よろしいですか？')) return
@@ -247,6 +267,9 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
   }
 
   const scopedOrders = orders.filter((order) => filterStore === 'all' || order.store_id === filterStore)
+  // 1店舗だけを見ているときは、予約を登録した順に並べ、発注済みの区切り線を入れる
+  const dividerStore = storeId ?? (filterStore === 'all' ? null : filterStore)
+  const storeCheckpoints = checkpoints.filter((point) => point.store_id === dividerStore).sort((a, b) => b.created_at.localeCompare(a.created_at))
 
   // 未渡し → お渡し済み → キャンセル の順。同じ中では予約日の新しい順
   const visible = useMemo(() => {
@@ -255,8 +278,11 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
     return scopedOrders
       .filter((order) => !onlyOpen || (!order.delivered_at && !order.cancelled_at))
       .filter((order) => !keyword || normalize(`${order.customer_name}${order.note ?? ''}${order.lines.map((line) => itemMap.get(line.product_id)?.name ?? '').join('')}`).includes(keyword))
-      .sort((a, b) => rank(a) - rank(b) || b.reserved_on.localeCompare(a.reserved_on) || b.created_at.localeCompare(a.created_at))
-  }, [itemMap, onlyOpen, scopedOrders, search])
+      .sort((a, b) => dividerStore !== null
+        ? (a.cancelled_at ? 1 : 0) - (b.cancelled_at ? 1 : 0) || b.created_at.localeCompare(a.created_at)
+        : rank(a) - rank(b) || b.reserved_on.localeCompare(a.reserved_on) || b.created_at.localeCompare(a.created_at))
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [itemMap, onlyOpen, scopedOrders, search, storeId, filterStore])
 
   const active = scopedOrders.filter((order) => !order.cancelled_at)
   const totals = {
@@ -473,11 +499,21 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
           </label>
         </div>
         <div className="divide-y divide-gray-100">
-          {visible.map((order) => {
+          {visible.map((order, index) => {
             const delivered = !!order.delivered_at
             const cancelled = !!order.cancelled_at
+            // この予約の上に入れる「発注済み」の区切り（1つ上の予約との間に入った区切り）
+            const previous = index > 0 ? visible[index - 1] : null
+            const upper = previous && !previous.cancelled_at ? previous.created_at : '9999'
+            const dividers = dividerStore === null || cancelled ? [] : storeCheckpoints.filter((point) => point.created_at < upper && point.created_at >= order.created_at)
             return (
-              <div key={order.id} className={`flex items-start gap-3 px-2 py-3 ${cancelled ? 'bg-gray-50 opacity-50' : delivered ? 'bg-green-50' : ''}`}>
+              <Fragment key={order.id}>
+              {dividers.map((point) => (
+                <div key={point.id} className="my-1 flex items-center gap-2 border-t-4 border-orange-400 bg-orange-50 px-2 py-1 text-xs font-bold text-orange-800">
+                  ▲ここから新しい発注リスト ／ {new Date(point.created_at).toLocaleString('ja-JP', { timeZone: 'Asia/Tokyo', month: 'numeric', day: 'numeric', hour: '2-digit', minute: '2-digit' })}「{point.note}」
+                </div>
+              ))}
+              <div className={`flex items-start gap-3 px-2 py-3 ${cancelled ? 'bg-gray-50 opacity-50' : delivered ? 'bg-green-50' : ''}`}>
                 <label className="flex shrink-0 flex-col items-center gap-0.5 pt-0.5 text-[10px] text-gray-500">
                   <input type="checkbox" checked={delivered} disabled={cancelled || busyId === order.id} onChange={() => void toggleDelivered(order)} className="h-6 w-6 accent-green-600" />
                   お渡し
@@ -496,10 +532,18 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
                     {order.lines.map((line) => {
                       const item = itemMap.get(line.product_id)
                       return (
-                        <li key={line.id ?? line.product_id} className="break-words">
+                        <li key={line.id ?? line.product_id} className="flex items-start gap-1.5 break-words">
+                          {line.id && (
+                            <label className={`mt-0.5 flex shrink-0 items-center gap-0.5 rounded px-1 text-[10px] ${line.needs_order ? 'bg-orange-100 font-bold text-orange-800' : 'text-gray-400'}`} title="店舗の在庫で足りず、発注が必要な商品">
+                              <input type="checkbox" checked={Boolean(line.needs_order)} disabled={cancelled} onChange={(event) => void toggleNeedsOrder(order, line.id!, event.target.checked)} className="h-4 w-4 accent-orange-500" />
+                              発注
+                            </label>
+                          )}
+                          <span className="min-w-0">
                           {item ? `${item.brand ? `${item.brand} ` : ''}${item.name}` : '（対象外になった商品）'} × {line.quantity}
                           <span className="ml-1 text-xs text-gray-500">{yen(line.unit_price)}</span>
                           {line.line_discount_type && <span className="ml-1 rounded bg-amber-100 px-1 text-[10px] text-amber-700">個別{discountLabel(line.line_discount_type, Number(line.line_discount_value ?? 0))}</span>}
+                          </span>
                         </li>
                       )
                     })}
@@ -517,6 +561,7 @@ export default function ReservationPanel({ campaign, storeId, stores, access }: 
                   )}
                 </div>
               </div>
+              </Fragment>
             )
           })}
           {visible.length === 0 && <p className="py-8 text-center text-sm text-gray-400">予約はまだありません</p>}
